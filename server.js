@@ -13,6 +13,8 @@ const FREE_GATEWAY_URL=(process.env.FREE_GATEWAY_URL||'https://api.llm7.io/v1').
 const FREE_GATEWAY_MODEL=process.env.FREE_GATEWAY_MODEL||'codestral-latest';
 const IMAGE_BASE_URL=(process.env.IMAGE_BASE_URL||'https://gen.pollinations.ai').replace(/\/$/,'');
 const IMAGE_MODEL=process.env.IMAGE_MODEL||'flux';
+const IMAGE_EDIT_MODEL=process.env.IMAGE_EDIT_MODEL||'kontext';
+const POLLINATIONS_KEY=process.env.POLLINATIONS_KEY||'';
 const CHAT_MODEL_CANDIDATES=(process.env.CHAT_MODEL_CANDIDATES||'gemini-3.1-flash-lite,deepseek-v4-flash:0731,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
 const CODE_MODEL_CANDIDATES=(process.env.CODE_MODEL_CANDIDATES||'deepseek-v4-flash:0731,gemini-3.1-flash-lite,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
 let ACTIVE_CHAT_MODEL=FREE_GATEWAY_MODEL;
@@ -38,6 +40,36 @@ function commonHeaders(type='application/json; charset=utf-8'){
     'Referrer-Policy':'no-referrer',
     'Cross-Origin-Resource-Policy':'same-origin'
   };
+}
+function parseDataImage(dataUrl){
+  const m=String(dataUrl||'').match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/);
+  if(!m) throw new Error('Imagem inválida.');
+  const buffer=Buffer.from(m[2],'base64');
+  if(!buffer.length) throw new Error('Imagem vazia.');
+  if(buffer.length>8*1024*1024) throw new Error('Imagem maior que 8 MB.');
+  return {mime:m[1],buffer};
+}
+async function editImageAuthenticated(dataUrl,prompt,filename='image.png',model=IMAGE_EDIT_MODEL,size='1024x1024'){
+  if(!POLLINATIONS_KEY) throw new Error('POLLINATIONS_KEY não configurada.');
+  const parsed=parseDataImage(dataUrl);
+  const form=new FormData();
+  form.append('image',new Blob([parsed.buffer],{type:parsed.mime}),filename);
+  form.append('prompt',prompt);
+  form.append('model',model);
+  form.append('size',size);
+  const r=await fetch(IMAGE_BASE_URL+'/v1/images/edits',{method:'POST',headers:{authorization:'Bearer '+POLLINATIONS_KEY},body:form});
+  const raw=await r.text();
+  let data=null;
+  try{data=JSON.parse(raw)}catch{}
+  if(!r.ok) throw new Error(data?.error?.message||data?.error||raw||('HTTP '+r.status));
+  const item=data?.data?.[0];
+  if(item?.url) return {url:item.url};
+  if(item?.b64_json) return {dataUrl:'data:image/png;base64,'+item.b64_json};
+  throw new Error('Edição não retornou imagem.');
+}
+function editImageReferenceUrl(sourceUrl,prompt,model=IMAGE_EDIT_MODEL){
+  if(!/^https?:\/\//i.test(sourceUrl)) throw new Error('Para edição sem chave, a imagem precisa ter URL pública.');
+  return IMAGE_BASE_URL+'/image/'+encodeURIComponent(prompt)+'?model='+encodeURIComponent(model)+'&image='+encodeURIComponent(sourceUrl)+'&nologo=true&seed='+Date.now();
 }
 function sendJson(res,status,obj){
   res.writeHead(status,commonHeaders());
@@ -508,6 +540,29 @@ const server=http.createServer(async(req,res)=>{
     });
     return res.end();
   }
+  if(pathnameSearch==='/image/edit'&&req.method==='POST'){
+    try{
+      const body=await readJson(req,12*1024*1024);
+      const prompt=String(body.prompt||'').trim().slice(0,1600);
+      const filename=String(body.filename||'image.png').trim().slice(0,120);
+      const model=String(body.model||IMAGE_EDIT_MODEL).trim().slice(0,120);
+      const size=String(body.size||'1024x1024').trim().slice(0,32);
+      const dataUrl=String(body.dataUrl||'');
+      const sourceUrl=String(body.sourceUrl||'');
+      if(!prompt) return sendJson(res,400,{error:'Prompt de edição vazio'});
+      if(POLLINATIONS_KEY&&dataUrl){
+        const out=await editImageAuthenticated(dataUrl,prompt,filename,model,size);
+        return sendJson(res,200,{ok:true,...out,model,mode:'authenticated-edit'});
+      }
+      if(sourceUrl){
+        const url=editImageReferenceUrl(sourceUrl,prompt,model);
+        return sendJson(res,200,{ok:true,url,model,mode:'reference-edit'});
+      }
+      return sendJson(res,409,{error:'Para editar uma imagem enviada do celular, configure POLLINATIONS_KEY no Railway. Imagens geradas pelo CodeZero podem ser editadas sem isso.'});
+    }catch(e){
+      return sendJson(res,500,{error:'Falha ao editar imagem',details:String(e?.message||e)});
+    }
+  }
   if(pathnameSearch==='/image'&&req.method==='GET'){
     try{
       const u=new URL(req.url,'http://localhost');
@@ -535,7 +590,7 @@ const server=http.createServer(async(req,res)=>{
     return sendJson(res,200,{
       status:'online',
       service:'CodeZero Railway',
-      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,image:true
+      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,imageEditModel:IMAGE_EDIT_MODEL,image:true,imageEdit:true,imageEditAuth:Boolean(POLLINATIONS_KEY)
     });
   }
   if(req.url==='/chat'&&req.method==='POST') return handleChat(req,res);
