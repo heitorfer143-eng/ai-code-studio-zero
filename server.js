@@ -9,6 +9,8 @@ const AI_BASE_URL=(process.env.AI_BASE_URL||'').replace(/\/$/,'');
 const AI_API_KEY=process.env.AI_API_KEY||'';
 const AI_MODEL=process.env.AI_MODEL||'';
 const LEGACY_TEXT_URL=(process.env.LEGACY_TEXT_URL||'https://text.pollinations.ai').replace(/\/$/,'');
+const FREE_GATEWAY_URL=(process.env.FREE_GATEWAY_URL||'https://api.llmfaucet.dev/v1').replace(/\/$/,'');
+const FREE_GATEWAY_MODEL=process.env.FREE_GATEWAY_MODEL||'auto:coding';
 
 const mime={
   '.html':'text/html; charset=utf-8',
@@ -69,59 +71,20 @@ function extractResponseText(value, depth=0){
   }
   return '';
 }
-async function workerSelfTest(){
+async function providerSelfTest(){
   try{
-    const payload={
-      message:'Responda somente com a palavra OK.',
-      prompt:'Responda somente com a palavra OK.',
-      query:'Responda somente com a palavra OK.',
-      input:'Responda somente com a palavra OK.',
-      messages:[{role:'user',content:'Responda somente com a palavra OK.'}]
-    };
-    const r=await fetch(WORKER_URL,{
-      method:'POST',
-      headers:{'content-type':'application/json','accept':'application/json'},
-      body:JSON.stringify(payload)
-    });
-    const raw=await r.text();
-    console.log('[worker-self-test]',r.status,raw.slice(0,1200));
-    if(/não retornou texto|respondeu sem texto/i.test(raw)){
-      const fb=await publicFallbackChat({message:'Responda somente com OK.'});
-      console.log('[fallback-self-test]',String(fb.response||'').slice(0,300));
-    }
+    const fb=await freeGatewayChat({message:'Responda somente com OK.'});
+    console.log('[free-gateway-self-test]',String(fb.response||'').slice(0,300));
   }catch(err){
-    console.log('[worker-self-test-error]',String(err?.message||err));
+    console.log('[free-gateway-self-test-error]',String(err?.message||err));
+    try{
+      const payload={message:'Responda somente com OK.'};
+      const wr=await workerChat(payload);
+      console.log('[worker-fallback-self-test]',String(wr.response||'').slice(0,300));
+    }catch(workerErr){
+      console.log('[worker-fallback-self-test-error]',String(workerErr?.message||workerErr));
+    }
   }
-}
-
-async function publicFallbackChat(payload){
-  const message=String(payload.message||'').trim();
-  const project=String(payload.project||'').slice(0,4200);
-  const history=Array.isArray(payload.history)
-    ? payload.history.slice(-4).map(x=>String(x?.role||'user')+': '+String(x?.content||'')).join('\n')
-    : '';
-  const prompt=[
-    'Você é o CodeZero, uma IA especialista em programação.',
-    'Responda em português do Brasil.',
-    'Quando alterar arquivos, use exatamente <<<FILE:nome>>> conteúdo <<<END_FILE>>>.',
-    'Seja direto, técnico e forneça código funcional.',
-    history ? 'Conversa recente:\n'+history : '',
-    'Pedido do usuário:\n'+message,
-    project ? 'Projeto atual:\n'+project : ''
-  ].filter(Boolean).join('\n\n');
-  const url=LEGACY_TEXT_URL+'/'+encodeURIComponent(prompt.slice(0,6500));
-  const r=await fetch(url,{
-    method:'GET',
-    headers:{'accept':'text/plain'}
-  });
-  const raw=(await r.text()).trim();
-  if(!r.ok) {
-    const err=new Error('Fallback AI '+r.status+': '+raw.slice(0,300));
-    err.status=r.status;
-    throw err;
-  }
-  if(!raw) throw new Error('Fallback AI respondeu vazio');
-  return {response:raw,provider:'public-fallback'};
 }
 
 async function workerChat(payload){
@@ -143,7 +106,12 @@ async function workerChat(payload){
   const brokenWorkerReply=/não retornou texto|respondeu sem texto/i.test(response||'');
   if(!response || brokenWorkerReply) {
     console.log('[worker-fallback]',brokenWorkerReply?'broken-worker-reply':'empty-worker-reply');
-    return publicFallbackChat(payload);
+    try{
+      return await freeGatewayChat(payload);
+    }catch(err){
+      console.log('[free-gateway-error]',String(err?.message||err));
+      return publicFallbackChat(payload);
+    }
   }
   return {response,provider:'workers-ai'};
 }
@@ -180,7 +148,12 @@ async function handleChat(req,res){
     if(AI_API_KEY&&AI_BASE_URL&&AI_MODEL){
       result=await providerChat(body);
     }else{
-      result=await workerChat(body);
+      try{
+        result=await freeGatewayChat(body);
+      }catch(err){
+        console.log('[free-gateway-error]',String(err?.message||err));
+        result=await workerChat(body);
+      }
     }
     return sendJson(res,200,result);
   }catch(e){
@@ -225,4 +198,4 @@ const server=http.createServer(async(req,res)=>{
     fs.createReadStream(file).pipe(res);
   });
 });
-server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'Workers fallback'}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) workerSelfTest();});
+server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'free-gateway'}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) providerSelfTest();});
