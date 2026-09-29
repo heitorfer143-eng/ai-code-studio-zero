@@ -111,13 +111,18 @@ function save(){localStorage.setItem('zero.files',JSON.stringify(files))}
 function saveAssets(){localStorage.setItem(ASSET_KEY,JSON.stringify(assets))}
 function resetProject(){
   if(!confirm('Resetar o projeto atual? Os chats serão mantidos.')) return;
+  if(isGodotProject()){
+    createGodotProject();
+    status('↻ Projeto Godot resetado');
+    return;
+  }
   files=JSON.parse(JSON.stringify(DEFAULT));
   assets={};
-  active='index.html';
+  active=Object.keys(files)[0];
   save();
   saveAssets();
   renderAssets();
-  $('#editor').value=files[active];
+  $('#editor').value=files[active]||'';
   tabs();
   lines();
   run();
@@ -344,7 +349,7 @@ function renderMessages(){
   root.textContent='';
   const c=activeChat();
   if(!c.messages.length){
-    appendMessage('ai','CodeZero online. Converse, peça alterações de código ou peça para pesquisar algo na web.');
+    appendMessage('ai','CodeZero online. Posso conversar, pesquisar e criar projetos Godot 4 completos em GDScript. Use “Novo Godot” para começar um jogo.');
     return;
   }
   for(const m of c.messages){
@@ -355,7 +360,7 @@ function status(t){$('#status').textContent=t}
 function projectContext(){
   const code=Object.entries(files).map(([n,c])=>`ARQUIVO ${n}:\n${c}`).join('\n\n');
   const assetList=Object.keys(assets).length?'\n\nASSETS GERADOS DISPONÍVEIS:\n'+Object.keys(assets).map(n=>'assets/'+n).join('\n'):'';
-  return (code+assetList).slice(0,18000);
+  return (code+assetList).slice(0,32000);
 }
 function applyFiles(text){
   const re=/<<<FILE:([^>]+)>>>([\s\S]*?)<<<END_FILE>>>/g;
