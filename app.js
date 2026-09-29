@@ -274,13 +274,78 @@ async function send(){
   }
 }
 
+function create3DProject(){
+  files={
+    'index.html':`<main id="app"><div id="hud">CodeZero 3D</div></main>`,
+    'style.css':`html,body,#app{margin:0;width:100%;height:100%;overflow:hidden;background:#05070b}canvas{display:block;width:100%;height:100%}#hud{position:fixed;z-index:5;left:12px;top:12px;padding:8px 10px;border-radius:10px;background:#0008;color:white;font:13px system-ui}`,
+    'script.js':`import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js';
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x10131a);
+
+const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,1000);
+camera.position.set(5,4,7);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xffffff,0x223344,2));
+const sun=new THREE.DirectionalLight(0xffffff,3);
+sun.position.set(5,8,4);
+scene.add(sun);
+
+const ground=new THREE.Mesh(
+  new THREE.PlaneGeometry(30,30),
+  new THREE.MeshStandardMaterial({color:0x263238,roughness:1})
+);
+ground.rotation.x=-Math.PI/2;
+scene.add(ground);
+
+const cube=new THREE.Mesh(
+  new THREE.BoxGeometry(),
+  new THREE.MeshStandardMaterial({color:0x4f8cff,roughness:.35,metalness:.15})
+);
+cube.position.y=.5;
+scene.add(cube);
+
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;
+
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+
+renderer.setAnimationLoop(()=>{
+  cube.rotation.y+=.01;
+  controls.update();
+  renderer.render(scene,camera);
+});`
+  };
+  active='script.js';
+  save();
+  $('#editor').value=files[active];
+  tabs();
+  lines();
+  run();
+  status('🧊 Projeto 3D criado');
+}
+
 function run(){
   files[active]=$('#editor').value;
   save();
   $('#console').textContent='';
   const bridge=`<script>['log','error','warn'].forEach(k=>{let o=console[k];console[k]=(...a)=>{parent.postMessage({zero:1,k,a},'*');o(...a)}});onerror=e=>parent.postMessage({zero:1,k:'error',a:[e.message]},'*')<\/script>`;
-  const js=(files['script.js']||'').replaceAll('</script','<\\/script');
-  $('#preview').srcdoc=`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none';connect-src 'none';img-src data: blob:;style-src 'unsafe-inline';script-src 'unsafe-inline'"><style>${files['style.css']||''}</style>${bridge}${files['index.html']||''}<script>${js}<\/script>`;
+  const js=files['script.js']||'';
+  const isModule=/^\s*(import|export)\b/m.test(js);
+  const safeJs=js.replaceAll('</script','<\\/script');
+  const scriptTag=isModule?`<script type="module">${safeJs}<\/script>`:`<script>${safeJs}<\/script>`;
+  const csp=`default-src 'none'; connect-src https://cdn.jsdelivr.net https://unpkg.com https://threejs.org https://raw.githubusercontent.com data: blob:; img-src data: blob: https:; media-src data: blob: https:; font-src data: https:; style-src 'unsafe-inline' https:; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; worker-src blob:;`;
+  $('#preview').srcdoc=`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${files['style.css']||''}</style>${bridge}${files['index.html']||''}${scriptTag}`;
 }
 
 window.onmessage=e=>{
@@ -294,6 +359,7 @@ $('#theme').onclick=()=>document.body.classList.toggle('light');
 $('#chatToggle').onclick=()=>{if($('#chatSidebar').classList.contains('open'))closeChatDrawer();else openChatDrawer()};
 $('#drawerShade').onclick=closeChatDrawer;
 $('#newChat').onclick=createChat;
+if($('#new3D')) $('#new3D').onclick=create3DProject;
 
 $('#editor').value=files[active];
 renderChatList();
