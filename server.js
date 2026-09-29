@@ -68,6 +68,27 @@ function extractResponseText(value, depth=0){
   }
   return '';
 }
+async function workerSelfTest(){
+  try{
+    const payload={
+      message:'Responda somente com a palavra OK.',
+      prompt:'Responda somente com a palavra OK.',
+      query:'Responda somente com a palavra OK.',
+      input:'Responda somente com a palavra OK.',
+      messages:[{role:'user',content:'Responda somente com a palavra OK.'}]
+    };
+    const r=await fetch(WORKER_URL,{
+      method:'POST',
+      headers:{'content-type':'application/json','accept':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    const raw=await r.text();
+    console.log('[worker-self-test]',r.status,raw.slice(0,1200));
+  }catch(err){
+    console.log('[worker-self-test-error]',String(err?.message||err));
+  }
+}
+
 async function workerChat(payload){
   const r=await fetch(WORKER_URL,{
     method:'POST',
@@ -168,4 +189,4 @@ const server=http.createServer(async(req,res)=>{
     fs.createReadStream(file).pipe(res);
   });
 });
-server.listen(PORT,'0.0.0.0',()=>console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'Workers fallback'}`));
+server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'Workers fallback'}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) workerSelfTest();});
