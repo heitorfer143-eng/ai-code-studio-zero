@@ -45,6 +45,11 @@ async function readJson(req,max=2e6){
   }
   return JSON.parse(raw||'{}');
 }
+function codingIntent(message){
+  const m=String(message||'').toLowerCase().trim();
+  if(!m) return false;
+  return /\b(cria|crie|criar|construa|construir|faz|faça|fazer|adicione|adiciona|adicionar|coloca|coloque|inserir|insira|remove|remova|tirar|corrige|corrija|corrigir|arruma|arrume|conserta|conserte|altera|altere|muda|mude|editar|edite|implemente|implementa|programa|programe|coda|code|refatora|refatore|html|css|javascript|js|script|função|funcao|arquivo|index|botão|botao|site|página|pagina|app|componente|bug|erro de código|erro no código|erro no codigo)\b/i.test(m);
+}
 function extractResponseText(value, depth=0){
   if(depth>6 || value==null) return '';
   if(typeof value==='string') return value.trim();
@@ -73,10 +78,14 @@ function extractResponseText(value, depth=0){
 }
 async function freeGatewayChat(payload){
   const message=String(payload.message||'').trim();
-  const project=String(payload.project||'').slice(0,10000);
-  const history=Array.isArray(payload.history)?payload.history.slice(-6):[];
+  const wantsCode=codingIntent(message);
+  const project=wantsCode?String(payload.project||'').slice(0,10000):'';
+  const history=Array.isArray(payload.history)?payload.history.slice(-8):[];
+  const systemPrompt=wantsCode
+    ? 'Você é o CodeZero, uma IA assistente e programadora. O usuário está pedindo uma alteração de código. Responda em português do Brasil. Explique brevemente o que fará e, quando alterar arquivos, use exatamente <<<FILE:nome>>> conteúdo <<<END_FILE>>>. Gere código funcional e completo. Não invente arquivos desnecessários.'
+    : 'Você é o CodeZero, uma IA geral integrada a um editor de código. Converse normalmente em português do Brasil: responda perguntas, ideias, cumprimentos e comentários de forma natural. NÃO altere arquivos, NÃO gere blocos <<<FILE:...>>> e NÃO transforme conversa casual em tarefa de programação. Só programe quando o usuário pedir explicitamente para criar, editar, corrigir ou implementar código.';
   const messages=[
-    {role:'system',content:'Você é o CodeZero, uma IA especialista em programação. Responda em português do Brasil. Quando alterar arquivos, use exatamente <<<FILE:nome>>> conteúdo <<<END_FILE>>>. Seja direto, técnico e forneça código funcional.'},
+    {role:'system',content:systemPrompt},
     ...history,
     {role:'user',content:message+(project?'\n\nProjeto atual:\n'+project:'')}
   ];
@@ -90,7 +99,7 @@ async function freeGatewayChat(payload){
     body:JSON.stringify({
       model:FREE_GATEWAY_MODEL,
       messages,
-      temperature:0.2,
+      temperature:0.3,
       max_tokens:1600
     })
   });
@@ -105,7 +114,7 @@ async function freeGatewayChat(payload){
   }
   const response=extractResponseText(data)||extractResponseText(raw);
   if(!response) throw new Error('Free gateway respondeu sem texto');
-  return {response,provider:'free-gateway'};
+  return {response,provider:'free-gateway',mode:wantsCode?'code':'chat'};
 }
 
 async function publicFallbackChat(payload){
@@ -177,15 +186,20 @@ async function workerChat(payload){
 }
 async function providerChat(payload){
   const message=String(payload.message||'').trim();
+  const wantsCode=codingIntent(message);
+  const project=wantsCode?String(payload.project||'').slice(0,12000):'';
+  const systemPrompt=wantsCode
+    ? 'Você é o CodeZero, uma IA assistente e programadora. O usuário pediu trabalho de código. Responda em português do Brasil. Ao alterar arquivos, use exatamente <<<FILE:nome>>> conteúdo <<<END_FILE>>> e gere código funcional.'
+    : 'Você é o CodeZero, uma IA geral integrada a um editor. Converse normalmente em português do Brasil. Não altere arquivos e não use marcadores <<<FILE:...>>> em conversa casual. Só programe quando o usuário pedir explicitamente.';
   const messages=[
-    {role:'system',content:'Você é a IA do CodeZero, especialista em programação. Responda em português do Brasil. Quando alterar arquivos, use exatamente <<<FILE:nome>>> conteúdo <<<END_FILE>>>. Forneça código funcional e completo.'},
-    ...(Array.isArray(payload.history)?payload.history.slice(-6):[]),
-    {role:'user',content:`${message}\n\nProjeto atual:\n${String(payload.project||'').slice(0,12000)}`}
+    {role:'system',content:systemPrompt},
+    ...(Array.isArray(payload.history)?payload.history.slice(-8):[]),
+    {role:'user',content:message+(project?'\n\nProjeto atual:\n'+project:'')}
   ];
   const r=await fetch(AI_BASE_URL+'/chat/completions',{
     method:'POST',
     headers:{'content-type':'application/json','authorization':'Bearer '+AI_API_KEY},
-    body:JSON.stringify({model:AI_MODEL,messages,temperature:.2})
+    body:JSON.stringify({model:AI_MODEL,messages,temperature:0.3})
   });
   const raw=await r.text();
   let data=null;
@@ -197,7 +211,7 @@ async function providerChat(payload){
   }
   const response=data?.choices?.[0]?.message?.content||data?.response||data?.output_text||'';
   if(!response) throw new Error('Provedor respondeu sem texto');
-  return {response};
+  return {response,mode:wantsCode?'code':'chat'};
 }
 async function handleChat(req,res){
   try{
