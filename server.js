@@ -8,6 +8,7 @@ const WORKER_URL=(process.env.WORKERS_AI_URL||'https://codezero-ai.heitorfer143.
 const AI_BASE_URL=(process.env.AI_BASE_URL||'').replace(/\/$/,'');
 const AI_API_KEY=process.env.AI_API_KEY||'';
 const AI_MODEL=process.env.AI_MODEL||'';
+const LEGACY_TEXT_URL=(process.env.LEGACY_TEXT_URL||'https://text.pollinations.ai').replace(/\/$/,'');
 
 const mime={
   '.html':'text/html; charset=utf-8',
@@ -84,9 +85,43 @@ async function workerSelfTest(){
     });
     const raw=await r.text();
     console.log('[worker-self-test]',r.status,raw.slice(0,1200));
+    if(/não retornou texto|respondeu sem texto/i.test(raw)){
+      const fb=await publicFallbackChat({message:'Responda somente com OK.'});
+      console.log('[fallback-self-test]',String(fb.response||'').slice(0,300));
+    }
   }catch(err){
     console.log('[worker-self-test-error]',String(err?.message||err));
   }
+}
+
+async function publicFallbackChat(payload){
+  const message=String(payload.message||'').trim();
+  const project=String(payload.project||'').slice(0,4200);
+  const history=Array.isArray(payload.history)
+    ? payload.history.slice(-4).map(x=>String(x?.role||'user')+': '+String(x?.content||'')).join('\n')
+    : '';
+  const prompt=[
+    'Você é o CodeZero, uma IA especialista em programação.',
+    'Responda em português do Brasil.',
+    'Quando alterar arquivos, use exatamente <<<FILE:nome>>> conteúdo <<<END_FILE>>>.',
+    'Seja direto, técnico e forneça código funcional.',
+    history ? 'Conversa recente:\n'+history : '',
+    'Pedido do usuário:\n'+message,
+    project ? 'Projeto atual:\n'+project : ''
+  ].filter(Boolean).join('\n\n');
+  const url=LEGACY_TEXT_URL+'/'+encodeURIComponent(prompt.slice(0,6500));
+  const r=await fetch(url,{
+    method:'GET',
+    headers:{'accept':'text/plain'}
+  });
+  const raw=(await r.text()).trim();
+  if(!r.ok) {
+    const err=new Error('Fallback AI '+r.status+': '+raw.slice(0,300));
+    err.status=r.status;
+    throw err;
+  }
+  if(!raw) throw new Error('Fallback AI respondeu vazio');
+  return {response:raw,provider:'public-fallback'};
 }
 
 async function workerChat(payload){
@@ -105,11 +140,12 @@ async function workerChat(payload){
     throw err;
   }
   const response=extractResponseText(data)||extractResponseText(raw);
-  if(!response) {
-    const preview=(raw||JSON.stringify(data)||'').slice(0,500);
-    throw new Error('Worker respondeu sem texto útil'+(preview?': '+preview:''));
+  const brokenWorkerReply=/não retornou texto|respondeu sem texto/i.test(response||'');
+  if(!response || brokenWorkerReply) {
+    console.log('[worker-fallback]',brokenWorkerReply?'broken-worker-reply':'empty-worker-reply');
+    return publicFallbackChat(payload);
   }
-  return {response};
+  return {response,provider:'workers-ai'};
 }
 async function providerChat(payload){
   const message=String(payload.message||'').trim();
