@@ -454,71 +454,188 @@ async function send(){
   }
 }
 
-function create3DProject(){
+function isGodotProject(){
+  return Object.prototype.hasOwnProperty.call(files,'project.godot');
+}
+
+function createGodotProject(){
   files={
-    'index.html':`<main id="app"><div id="hud">CodeZero 3D</div></main>`,
-    'style.css':`html,body,#app{margin:0;width:100%;height:100%;overflow:hidden;background:#05070b}canvas{display:block;width:100%;height:100%}#hud{position:fixed;z-index:5;left:12px;top:12px;padding:8px 10px;border-radius:10px;background:#0008;color:white;font:13px system-ui}`,
-    'script.js':`import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js';
+    'project.godot':`; Engine configuration file.
+; Edit with Godot 4.x.
 
-const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x10131a);
+config_version=5
 
-const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,1000);
-camera.position.set(5,4,7);
+[application]
 
-const renderer=new THREE.WebGLRenderer({antialias:true});
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));
-renderer.setSize(innerWidth,innerHeight);
-document.body.appendChild(renderer.domElement);
+config/name="CodeZero Godot"
+run/main_scene="res://main.tscn"
 
-scene.add(new THREE.HemisphereLight(0xffffff,0x223344,2));
-const sun=new THREE.DirectionalLight(0xffffff,3);
-sun.position.set(5,8,4);
-scene.add(sun);
+[display]
 
-const ground=new THREE.Mesh(
-  new THREE.PlaneGeometry(30,30),
-  new THREE.MeshStandardMaterial({color:0x263238,roughness:1})
-);
-ground.rotation.x=-Math.PI/2;
-scene.add(ground);
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/window_width_override=960
+window/size/window_height_override=540
+window/stretch/mode="canvas_items"
 
-const cube=new THREE.Mesh(
-  new THREE.BoxGeometry(),
-  new THREE.MeshStandardMaterial({color:0x4f8cff,roughness:.35,metalness:.15})
-);
-cube.position.y=.5;
-scene.add(cube);
+[input]
 
-const controls=new OrbitControls(camera,renderer.domElement);
-controls.enableDamping=true;
+move_left={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":65)]
+}
+move_right={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":68)]
+}
+move_forward={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":87)]
+}
+move_back={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"physical_keycode":83)]
+}
 
-addEventListener('resize',()=>{
-  camera.aspect=innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth,innerHeight);
-});
+[rendering]
 
-renderer.setAnimationLoop(()=>{
-  cube.rotation.y+=.01;
-  controls.update();
-  renderer.render(scene,camera);
-});`
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+`,
+    'main.tscn':`[gd_scene load_steps=4 format=3]
+
+[ext_resource path="res://player.gd" type="Script" id="1"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_ground"]
+size = Vector3(20, 0.2, 20)
+
+[sub_resource type="BoxShape3D" id="BoxShape_ground"]
+size = Vector3(20, 0.2, 20)
+
+[node name="Main" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-55, -30, 0)
+shadow_enabled = true
+
+[node name="Ground" type="StaticBody3D" parent="."]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
+mesh = SubResource("BoxMesh_ground")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
+shape = SubResource("BoxShape_ground")
+
+[node name="Player" type="CharacterBody3D" parent="."]
+script = ExtResource("1")
+position = Vector3(0, 1, 0)
+
+[node name="Camera3D" type="Camera3D" parent="Player"]
+position = Vector3(0, 2.2, 5)
+current = true
+`,
+    'player.gd':`extends CharacterBody3D
+
+@export var speed: float = 5.0
+@export var gravity: float = 18.0
+
+func _physics_process(delta: float) -> void:
+    if not is_on_floor():
+        velocity.y -= gravity * delta
+
+    var input_dir := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+    var direction := Vector3(input_dir.x, 0.0, input_dir.y).normalized()
+
+    if direction != Vector3.ZERO:
+        velocity.x = direction.x * speed
+        velocity.z = direction.z * speed
+    else:
+        velocity.x = move_toward(velocity.x, 0.0, speed)
+        velocity.z = move_toward(velocity.z, 0.0, speed)
+
+    move_and_slide()
+`
   };
-  active='script.js';
+  assets={};
+  active='player.gd';
   save();
+  saveAssets();
+  renderAssets();
   $('#editor').value=files[active];
   tabs();
   lines();
   run();
-  status('🧊 Projeto 3D criado');
+  status('🎮 Projeto Godot criado');
+}
+
+function create3DProject(){
+  createGodotProject();
+}
+
+async function exportGodotZip(){
+  if(!isGodotProject()){
+    status('⚠️ Este projeto não é Godot.');
+    return;
+  }
+  try{
+    status('📦 Preparando ZIP Godot…');
+    const {zipSync,strToU8}=await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js');
+    const entries={};
+    for(const [name,content] of Object.entries(files)) entries[name]=strToU8(String(content));
+    for(const [name,url] of Object.entries(assets)){
+      if(String(url).startsWith('data:')){
+        const [meta,b64]=String(url).split(',');
+        const bin=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+        entries['assets/'+name]=bin;
+      }
+    }
+    const zipped=zipSync(entries,{level:6});
+    const blob=new Blob([zipped],{type:'application/zip'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='CodeZero-Godot-Project.zip';
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+    status('✅ Projeto Godot exportado');
+  }catch(e){
+    status('⚠️ Falha ao exportar: '+e.message);
+  }
 }
 
 function run(){
   files[active]=$('#editor').value;
   save();
   $('#console').textContent='';
+
+  if(isGodotProject()){
+    const gd=Object.keys(files).filter(n=>n.endsWith('.gd')).length;
+    const scenes=Object.keys(files).filter(n=>n.endsWith('.tscn')).length;
+    const resources=Object.keys(files).filter(n=>n.endsWith('.tres')||n.endsWith('.gdshader')).length;
+    const html=`
+      <style>
+        body{margin:0;background:#12151d;color:#eef4ff;font-family:system-ui;padding:22px}
+        .godot{max-width:700px;margin:auto}
+        .badge{display:inline-block;padding:5px 9px;border-radius:999px;background:#478cbf;color:white;font-size:12px}
+        .card{margin-top:15px;padding:15px;border:1px solid #34425a;border-radius:12px;background:#191f2a}
+        code{color:#8bd5ff}
+      </style>
+      <div class="godot">
+        <span class="badge">Godot 4 Project</span>
+        <h2>🎮 Projeto pronto para abrir no Godot</h2>
+        <div class="card">
+          <b>${Object.keys(files).length} arquivos</b><br>
+          ${scenes} cena(s) • ${gd} script(s) GDScript • ${resources} recurso(s)/shader(s)
+        </div>
+        <p>Edite <code>project.godot</code>, <code>.tscn</code> e <code>.gd</code> nas abas. Use <b>Baixar Godot ZIP</b> para abrir no editor Godot.</p>
+        <p>O CodeZero não finge executar o engine Godot dentro deste iframe; ele gera um projeto Godot real.</p>
+      </div>`;
+    $('#preview').srcdoc=html;
+    $('#console').textContent='Godot project mode\nMain scene: '+(/run\/main_scene="([^"]+)"/.exec(files['project.godot']||'')?.[1]||'não definida')+'\n';
+    return;
+  }
+
   const bridge=`<script>['log','error','warn'].forEach(k=>{let o=console[k];console[k]=(...a)=>{parent.postMessage({zero:1,k,a},'*');o(...a)}});onerror=e=>parent.postMessage({zero:1,k:'error',a:[e.message]},'*')<\/script>`;
   const js=resolveAssets(files['script.js']||'');
   const isModule=/^\s*(import|export)\b/m.test(js);
@@ -539,7 +656,8 @@ $('#theme').onclick=()=>document.body.classList.toggle('light');
 $('#chatToggle').onclick=()=>{if($('#chatSidebar').classList.contains('open'))closeChatDrawer();else openChatDrawer()};
 $('#drawerShade').onclick=closeChatDrawer;
 $('#newChat').onclick=createChat;
-if($('#new3D')) $('#new3D').onclick=create3DProject;
+if($('#new3D')) $('#new3D').onclick=createGodotProject;
+if($('#exportGodot')) $('#exportGodot').onclick=exportGodotZip;
 if($('#resetProject')) $('#resetProject').onclick=resetProject;
 if($('#imageTool')) $('#imageTool').onclick=manualImage;
 if($('#uploadImage')) $('#uploadImage').onclick=manualUploadImage;
