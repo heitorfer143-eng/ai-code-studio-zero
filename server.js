@@ -71,6 +71,66 @@ function extractResponseText(value, depth=0){
   }
   return '';
 }
+async function freeGatewayChat(payload){
+  const message=String(payload.message||'').trim();
+  const project=String(payload.project||'').slice(0,10000);
+  const history=Array.isArray(payload.history)?payload.history.slice(-6):[];
+  const messages=[
+    {role:'system',content:'Você é o CodeZero, uma IA especialista em programação. Responda em português do Brasil. Quando alterar arquivos, use exatamente <<<FILE:nome>>> conteúdo <<<END_FILE>>>. Seja direto, técnico e forneça código funcional.'},
+    ...history,
+    {role:'user',content:message+(project?'\n\nProjeto atual:\n'+project:'')}
+  ];
+  const r=await fetch(FREE_GATEWAY_URL+'/chat/completions',{
+    method:'POST',
+    headers:{
+      'content-type':'application/json',
+      'accept':'application/json',
+      'authorization':'Bearer free'
+    },
+    body:JSON.stringify({
+      model:FREE_GATEWAY_MODEL,
+      messages,
+      temperature:0.2,
+      max_tokens:1600
+    })
+  });
+  const raw=await r.text();
+  let data=null;
+  try{data=JSON.parse(raw)}catch{}
+  if(!r.ok){
+    const detail=data?.error?.message||data?.error||data?.details||raw||('HTTP '+r.status);
+    const err=new Error('Free gateway '+r.status+': '+String(detail).slice(0,500));
+    err.status=r.status;
+    throw err;
+  }
+  const response=extractResponseText(data)||extractResponseText(raw);
+  if(!response) throw new Error('Free gateway respondeu sem texto');
+  return {response,provider:'free-gateway'};
+}
+
+async function publicFallbackChat(payload){
+  const message=String(payload.message||'').trim();
+  const history=Array.isArray(payload.history)
+    ? payload.history.slice(-4).map(x=>String(x?.role||'user')+': '+String(x?.content||'')).join('\n')
+    : '';
+  const prompt=[
+    'Você é o CodeZero, uma IA especialista em programação.',
+    'Responda em português do Brasil.',
+    history ? 'Conversa recente:\n'+history : '',
+    'Pedido do usuário:\n'+message
+  ].filter(Boolean).join('\n\n');
+  const url=LEGACY_TEXT_URL+'/'+encodeURIComponent(prompt.slice(0,1800));
+  const r=await fetch(url,{headers:{accept:'text/plain'}});
+  const raw=(await r.text()).trim();
+  if(!r.ok){
+    const err=new Error('Fallback AI '+r.status+': '+raw.slice(0,300));
+    err.status=r.status;
+    throw err;
+  }
+  if(!raw) throw new Error('Fallback AI respondeu vazio');
+  return {response:raw,provider:'legacy-fallback'};
+}
+
 async function providerSelfTest(){
   try{
     const fb=await freeGatewayChat({message:'Responda somente com OK.'});
