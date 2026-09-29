@@ -7,8 +7,10 @@ const DEFAULT={
 const API='/chat';
 const CHAT_KEY='zero.chats.v1';
 const ACTIVE_CHAT_KEY='zero.activeChat.v1';
+const ASSET_KEY='zero.assets.v1';
 
 let files=JSON.parse(localStorage.getItem('zero.files')||'null')||DEFAULT;
+let assets=JSON.parse(localStorage.getItem(ASSET_KEY)||'{}')||{};
 let active=Object.keys(files)[0];
 let busy=false;
 let chats=loadChats();
@@ -106,6 +108,68 @@ function closeChatDrawer(){
 }
 
 function save(){localStorage.setItem('zero.files',JSON.stringify(files))}
+function saveAssets(){localStorage.setItem(ASSET_KEY,JSON.stringify(assets))}
+function resetProject(){
+  if(!confirm('Resetar o projeto atual? Os chats serão mantidos.')) return;
+  files=JSON.parse(JSON.stringify(DEFAULT));
+  assets={};
+  active='index.html';
+  save();
+  saveAssets();
+  $('#editor').value=files[active];
+  tabs();
+  lines();
+  run();
+  status('↻ Projeto resetado');
+}
+async function generateImageAsset(name,prompt){
+  const cleanName=String(name||'imagem.png').trim().replace(/^assets\//,'').replace(/[^\w.\-]/g,'-')||'imagem.png';
+  const q=new URLSearchParams({prompt:String(prompt||'').trim()});
+  const r=await fetch('/image?'+q.toString());
+  const data=await r.json();
+  if(!r.ok||!data?.url) throw new Error(data?.details||data?.error||'Falha ao gerar imagem');
+  assets[cleanName]=data.url;
+  saveAssets();
+  return {name:cleanName,url:data.url};
+}
+async function manualImage(){
+  const promptText=prompt('Descreva a imagem que o CodeZero deve criar:');
+  if(!promptText) return;
+  const name=(prompt('Nome do arquivo:','generated-image.png')||'generated-image.png').trim();
+  status('🎨 Gerando imagem…');
+  try{
+    const out=await generateImageAsset(name,promptText);
+    status('🖼️ Imagem criada: assets/'+out.name);
+    const chat=activeChat();
+    chat.messages.push({role:'assistant',content:'Imagem criada: assets/'+out.name,display:'🖼️ Imagem criada: assets/'+out.name+'\n'+out.url});
+    chat.updatedAt=Date.now();
+    saveChats();
+    renderMessages();
+  }catch(e){
+    status('⚠️ '+e.message);
+  }
+}
+function resolveAssets(text){
+  let out=String(text||'');
+  for(const [name,url] of Object.entries(assets)){
+    out=out.split('assets/'+name).join(url);
+  }
+  return out;
+}
+async function processImageRequests(text){
+  const re=/<<<IMAGE:([^|>]+)\|([\s\S]*?)>>>/g;
+  const jobs=[];
+  let m;
+  while((m=re.exec(String(text||'')))) jobs.push({name:m[1].trim(),prompt:m[2].trim()});
+  const made=[];
+  for(const job of jobs){
+    if(!job.prompt) continue;
+    try{made.push(await generateImageAsset(job.name,job.prompt));}
+    catch(e){console.error('image generation failed',job,e);}
+  }
+  return made;
+}
+
 function tabs(){
   const n=$('#tabs');
   n.textContent='';
@@ -177,7 +241,9 @@ function renderMessages(){
 }
 function status(t){$('#status').textContent=t}
 function projectContext(){
-  return Object.entries(files).map(([n,c])=>`ARQUIVO ${n}:\n${c}`).join('\n\n').slice(0,10000);
+  const code=Object.entries(files).map(([n,c])=>`ARQUIVO ${n}:\n${c}`).join('\n\n');
+  const assetList=Object.keys(assets).length?'\n\nASSETS GERADOS DISPONÍVEIS:\n'+Object.keys(assets).map(n=>'assets/'+n).join('\n'):'';
+  return (code+assetList).slice(0,18000);
 }
 function applyFiles(text){
   const re=/<<<FILE:([^>]+)>>>([\s\S]*?)<<<END_FILE>>>/g;
@@ -199,7 +265,7 @@ function applyFiles(text){
   return changed;
 }
 function visibleReply(text){
-  return String(text||'').replace(/<<<FILE:[^>]+>>>[\s\S]*?(?:<<<END_FILE>>>|$)/g,'').trim();
+  return String(text||'').replace(/<<<FILE:[^>]+>>>[\s\S]*?(?:<<<END_FILE>>>|$)/g,'').replace(/<<<IMAGE:[\s\S]*?>>>/g,'').trim();
 }
 function extractText(value,raw='',depth=0){
   if(depth>6||value==null) return '';
@@ -250,8 +316,9 @@ async function send(){
     }
     const full=extractText(data,raw);
     if(!full.trim()) throw new Error('O CodeZero respondeu vazio.');
+    const generatedImages=await processImageRequests(full);
     const changed=applyFiles(full);
-    const clean=(visibleReply(full)||'Código atualizado.')+(changed.length?'\n\n✓ '+changed.join(', '):'');
+    const clean=(visibleReply(full)||'Projeto atualizado.')+(changed.length?'\n\n✓ '+changed.join(', '):'')+(generatedImages.length?'\n🖼️ '+generatedImages.map(x=>'assets/'+x.name).join(', '):'');
     chat.messages.push({role:'assistant',content:full,display:clean,sources:data?.sources||[]});
     chat.updatedAt=Date.now();
     saveChats();
@@ -340,12 +407,12 @@ function run(){
   save();
   $('#console').textContent='';
   const bridge=`<script>['log','error','warn'].forEach(k=>{let o=console[k];console[k]=(...a)=>{parent.postMessage({zero:1,k,a},'*');o(...a)}});onerror=e=>parent.postMessage({zero:1,k:'error',a:[e.message]},'*')<\/script>`;
-  const js=files['script.js']||'';
+  const js=resolveAssets(files['script.js']||'');
   const isModule=/^\s*(import|export)\b/m.test(js);
   const safeJs=js.replaceAll('</script','<\\/script');
   const scriptTag=isModule?`<script type="module">${safeJs}<\/script>`:`<script>${safeJs}<\/script>`;
   const csp=`default-src 'none'; connect-src https://cdn.jsdelivr.net https://unpkg.com https://threejs.org https://raw.githubusercontent.com data: blob:; img-src data: blob: https:; media-src data: blob: https:; font-src data: https:; style-src 'unsafe-inline' https:; script-src 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; worker-src blob:;`;
-  $('#preview').srcdoc=`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${files['style.css']||''}</style>${bridge}${files['index.html']||''}${scriptTag}`;
+  $('#preview').srcdoc=`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${resolveAssets(files['style.css']||'')}</style>${bridge}${resolveAssets(files['index.html']||'')}${scriptTag}`;
 }
 
 window.onmessage=e=>{
@@ -360,6 +427,8 @@ $('#chatToggle').onclick=()=>{if($('#chatSidebar').classList.contains('open'))cl
 $('#drawerShade').onclick=closeChatDrawer;
 $('#newChat').onclick=createChat;
 if($('#new3D')) $('#new3D').onclick=create3DProject;
+if($('#resetProject')) $('#resetProject').onclick=resetProject;
+if($('#imageTool')) $('#imageTool').onclick=manualImage;
 
 $('#editor').value=files[active];
 renderChatList();
