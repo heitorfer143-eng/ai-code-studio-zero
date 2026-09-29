@@ -11,6 +11,10 @@ const AI_MODEL=process.env.AI_MODEL||'';
 const LEGACY_TEXT_URL=(process.env.LEGACY_TEXT_URL||'https://text.pollinations.ai').replace(/\/$/,'');
 const FREE_GATEWAY_URL=(process.env.FREE_GATEWAY_URL||'https://api.llm7.io/v1').replace(/\/$/,'');
 const FREE_GATEWAY_MODEL=process.env.FREE_GATEWAY_MODEL||'codestral-latest';
+const CHAT_MODEL_CANDIDATES=(process.env.CHAT_MODEL_CANDIDATES||'gemini-3.1-flash-lite,deepseek-v4-flash:0731,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
+const CODE_MODEL_CANDIDATES=(process.env.CODE_MODEL_CANDIDATES||'deepseek-v4-flash:0731,gemini-3.1-flash-lite,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
+let ACTIVE_CHAT_MODEL=FREE_GATEWAY_MODEL;
+let ACTIVE_CODE_MODEL=FREE_GATEWAY_MODEL;
 
 const mime={
   '.html':'text/html; charset=utf-8',
@@ -152,23 +156,7 @@ function extractResponseText(value, depth=0){
   }
   return '';
 }
-async function freeGatewayChat(payload){
-  const message=String(payload.message||'').trim();
-  const wantsCode=codingIntent(message);
-  const wantsWeb=webIntent(message);
-  const project=wantsCode?String(payload.project||'').slice(0,10000):'';
-  const history=Array.isArray(payload.history)?payload.history.slice(-8):[];
-  let sources=[];
-  if(wantsWeb){ try{sources=await researchWeb(message);}catch(err){console.log('[web-search-error]',String(err?.message||err));} }
-  const webContext=sources.length?('\n\nPESQUISA WEB ATUAL:\n'+sources.map((x,i)=>`[${i+1}] ${x.title}\n${x.url}\n${x.excerpt}`).join('\n\n')):'';
-  const systemPrompt=wantsCode
-    ? 'Você é o CodeZero, uma IA assistente e programadora. O usuário está pedindo uma alteração de código. Responda em português do Brasil. Explique brevemente o que fará e, quando alterar arquivos, use exatamente <<<FILE:nome>>> conteúdo <<<END_FILE>>>. Gere código funcional e completo. Não invente arquivos desnecessários. Se houver pesquisa web, use-a como referência e cite [1], [2] etc.'
-    : 'Você é o CodeZero, uma IA geral integrada a um editor de código. Converse normalmente em português do Brasil: responda perguntas, ideias, cumprimentos e comentários de forma natural. NÃO altere arquivos, NÃO gere blocos <<<FILE:...>>> e NÃO transforme conversa casual em tarefa de programação. Só programe quando o usuário pedir explicitamente para criar, editar, corrigir ou implementar código. Quando receber pesquisa web, use-a para responder com fatos atuais e cite [1], [2] etc.';
-  const messages=[
-    {role:'system',content:systemPrompt},
-    ...history,
-    {role:'user',content:message+(project?'\n\nProjeto atual:\n'+project:'')+webContext}
-  ];
+async function gatewayCompletion(messages,model,maxTokens=1800,temperature=0.25){
   const r=await fetch(FREE_GATEWAY_URL+'/chat/completions',{
     method:'POST',
     headers:{
@@ -176,27 +164,115 @@ async function freeGatewayChat(payload){
       'accept':'application/json',
       'authorization':'Bearer unused'
     },
-    body:JSON.stringify({
-      model:FREE_GATEWAY_MODEL,
-      messages,
-      temperature:0.3,
-      max_tokens:1600
-    })
+    body:JSON.stringify({model,messages,temperature,max_tokens:maxTokens})
   });
   const raw=await r.text();
   let data=null;
   try{data=JSON.parse(raw)}catch{}
   if(!r.ok){
     const detail=data?.error?.message||data?.error||data?.details||raw||('HTTP '+r.status);
-    const err=new Error('Free gateway '+r.status+': '+String(detail).slice(0,500));
+    const err=new Error('Gateway '+model+' '+r.status+': '+String(detail).slice(0,500));
     err.status=r.status;
     throw err;
   }
   const response=extractResponseText(data)||extractResponseText(raw);
-  if(!response) throw new Error('Free gateway respondeu sem texto');
-  return {response,provider:'free-gateway',mode:wantsCode?'code':'chat',searched:wantsWeb,sources:sources.map(({title,url})=>({title,url}))};
+  if(!response) throw new Error('Gateway '+model+' respondeu sem texto');
+  return response;
 }
 
+async function firstWorkingModel(candidates,label){
+  for(const model of candidates){
+    try{
+      const text=await gatewayCompletion([
+        {role:'system',content:'Responda somente OK.'},
+        {role:'user',content:'OK?'}
+      ],model,16,0);
+      if(text){
+        console.log('[model-selected]',label,model,String(text).slice(0,40));
+        return model;
+      }
+    }catch(err){
+      console.log('[model-rejected]',label,model,String(err?.message||err).slice(0,180));
+    }
+  }
+  return FREE_GATEWAY_MODEL;
+}
+
+async function selectBestModels(){
+  ACTIVE_CHAT_MODEL=await firstWorkingModel(CHAT_MODEL_CANDIDATES,'chat');
+  ACTIVE_CODE_MODEL=await firstWorkingModel(CODE_MODEL_CANDIDATES,'code');
+  console.log('[brain-models]',JSON.stringify({chat:ACTIVE_CHAT_MODEL,code:ACTIVE_CODE_MODEL}));
+}
+
+async function freeGatewayChat(payload){
+  const message=String(payload.message||'').trim();
+  const wantsCode=codingIntent(message);
+  const wantsWeb=webIntent(message);
+  const project=wantsCode?String(payload.project||'').slice(0,18000):'';
+  const history=Array.isArray(payload.history)?payload.history.slice(-10):[];
+  let sources=[];
+  if(wantsWeb){
+    try{sources=await researchWeb(message);}
+    catch(err){console.log('[web-search-error]',String(err?.message||err));}
+  }
+  const webContext=sources.length
+    ? '\n\nPESQUISA WEB ATUAL:\n'+sources.map((x,i)=>`[${i+1}] ${x.title}\n${x.url}\n${x.excerpt}`).join('\n\n')
+    : '';
+
+  if(!wantsCode){
+    const systemPrompt='Você é o CodeZero, uma IA geral forte integrada a um editor. Converse naturalmente em português do Brasil. Responda diretamente ao que foi perguntado. Não transforme conversa casual em programação. Não altere arquivos nem use marcadores <<<FILE:...>>> sem pedido explícito. Quando houver pesquisa web, use as fontes, diferencie fatos de inferências e cite [1], [2] etc.';
+    const messages=[
+      {role:'system',content:systemPrompt},
+      ...history,
+      {role:'user',content:message+webContext}
+    ];
+    const response=await gatewayCompletion(messages,ACTIVE_CHAT_MODEL,2200,0.35);
+    return {response,provider:'brain-v8.2',model:ACTIVE_CHAT_MODEL,mode:'chat',searched:wantsWeb,sources:sources.map(({title,url})=>({title,url}))};
+  }
+
+  // Passo 1: planejar sem editar arquivos.
+  const planningMessages=[
+    {role:'system',content:'Você é o planejador técnico do CodeZero. Analise o pedido e o projeto. Produza um plano curto, identifique arquivos afetados, riscos, dependências e critérios de sucesso. NÃO escreva blocos <<<FILE>>> ainda.'},
+    ...history.slice(-6),
+    {role:'user',content:message+'\n\nPROJETO:\n'+project+webContext}
+  ];
+  let plan='';
+  try{
+    plan=await gatewayCompletion(planningMessages,ACTIVE_CODE_MODEL,900,0.15);
+  }catch(err){
+    console.log('[planner-error]',String(err?.message||err));
+  }
+
+  // Passo 2: executar com o plano.
+  const executionMessages=[
+    {role:'system',content:'Você é o executor principal do CodeZero. Implemente o pedido em português do Brasil. Para TODO arquivo criado ou alterado use exatamente <<<FILE:nome>>> conteúdo completo <<<END_FILE>>>. Preserve o que já funciona. Não entregue pseudocódigo. Corrija sintaxe e integração entre arquivos.'},
+    ...history.slice(-6),
+    {role:'user',content:message+'\n\nPLANO TÉCNICO:\n'+plan+'\n\nPROJETO ATUAL:\n'+project+webContext}
+  ];
+  let draft=await gatewayCompletion(executionMessages,ACTIVE_CODE_MODEL,3600,0.18);
+
+  // Passo 3: revisão independente do resultado.
+  const reviewMessages=[
+    {role:'system',content:'Você é o revisor sênior do CodeZero. Revise a solução abaixo procurando bugs de sintaxe, variáveis inexistentes, arquivos incompletos, regressões, problemas mobile e divergência do pedido. Se houver problema, devolva a SOLUÇÃO CORRIGIDA COMPLETA usando os mesmos marcadores <<<FILE:nome>>>...<<<END_FILE>>>. Se estiver correta, devolva exatamente a solução recebida, sem comentários adicionais.'},
+    {role:'user',content:'PEDIDO:\n'+message+'\n\nPROJETO ORIGINAL:\n'+project+'\n\nSOLUÇÃO GERADA:\n'+draft}
+  ];
+  try{
+    const reviewed=await gatewayCompletion(reviewMessages,ACTIVE_CODE_MODEL,3800,0.08);
+    if(reviewed&&reviewed.includes('<<<FILE:')) draft=reviewed;
+  }catch(err){
+    console.log('[reviewer-error]',String(err?.message||err));
+  }
+
+  return {
+    response:draft,
+    provider:'brain-v8.2',
+    model:ACTIVE_CODE_MODEL,
+    mode:'code',
+    plan,
+    searched:wantsWeb,
+    sources:sources.map(({title,url})=>({title,url}))
+  };
+}
 async function publicFallbackChat(payload){
   const message=String(payload.message||'').trim();
   const history=Array.isArray(payload.history)
@@ -222,17 +298,13 @@ async function publicFallbackChat(payload){
 
 async function providerSelfTest(){
   try{
-    const fb=await freeGatewayChat({message:'Responda somente com OK.'});
-    console.log('[free-gateway-self-test]',String(fb.response||'').slice(0,300));
+    await selectBestModels();
+    const chat=await freeGatewayChat({message:'Oi, diga apenas OK.'});
+    console.log('[brain-chat-self-test]',chat.model,String(chat.response||'').slice(0,120));
+    const code=await freeGatewayChat({message:'Crie uma função JavaScript soma(a,b) que retorna a+b.',project:'ARQUIVO script.js:\n'});
+    console.log('[brain-code-self-test]',code.model,String(code.response||'').slice(0,180));
   }catch(err){
-    console.log('[free-gateway-self-test-error]',String(err?.message||err));
-    try{
-      const payload={message:'Responda somente com OK.'};
-      const wr=await workerChat(payload);
-      console.log('[worker-fallback-self-test]',String(wr.response||'').slice(0,300));
-    }catch(workerErr){
-      console.log('[worker-fallback-self-test-error]',String(workerErr?.message||workerErr));
-    }
+    console.log('[brain-self-test-error]',String(err?.message||err));
   }
 }
 
@@ -349,7 +421,7 @@ const server=http.createServer(async(req,res)=>{
     return sendJson(res,200,{
       status:'online',
       service:'CodeZero Railway',
-      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'workers-fallback'
+      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.2',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL
     });
   }
   if(req.url==='/chat'&&req.method==='POST') return handleChat(req,res);
@@ -364,4 +436,4 @@ const server=http.createServer(async(req,res)=>{
     fs.createReadStream(file).pipe(res);
   });
 });
-server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'free-gateway'}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) providerSelfTest();});
+server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'brain-v8.2'}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) providerSelfTest();});
