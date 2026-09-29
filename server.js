@@ -288,7 +288,7 @@ async function freeGatewayChat(payload){
       {role:'user',content:message+webContext}
     ];
     const response=await gatewayCompletion(messages,ACTIVE_CHAT_MODEL,2200,0.35);
-    return {response,provider:'brain-v8.2',model:ACTIVE_CHAT_MODEL,mode:'chat',searched:wantsWeb,sources:sources.map(({title,url})=>({title,url}))};
+    return {response,provider:'brain-v8.3-agent',model:ACTIVE_CHAT_MODEL,mode:'chat',searched:wantsWeb,sources:sources.map(({title,url})=>({title,url}))};
   }
 
   // Passo 1: planejar sem editar arquivos.
@@ -305,31 +305,58 @@ async function freeGatewayChat(payload){
   }
 
   // Passo 2: executar com o plano.
+  const knownFiles=projectFileNames(project);
   const executionMessages=[
-    {role:'system',content:'Você é o executor principal do CodeZero. Implemente o pedido em português do Brasil. Para TODO arquivo criado ou alterado use exatamente <<<FILE:nome>>> conteúdo completo <<<END_FILE>>>. Preserve o que já funciona. Não entregue pseudocódigo. Corrija sintaxe e integração entre arquivos.'},
+    {role:'system',content:'Você é o executor principal do CodeZero. Implemente EXATAMENTE o pedido. Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>. Preserve todo comportamento existente que não foi pedido para mudar. Não use pseudocódigo, TODOs ou placeholders. Não diga que fez algo sem entregar o arquivo correspondente. Arquivos conhecidos: '+knownFiles.join(', ')},
     ...history.slice(-6),
     {role:'user',content:message+'\n\nPLANO TÉCNICO:\n'+plan+'\n\nPROJETO ATUAL:\n'+project+webContext}
   ];
-  let draft=await gatewayCompletion(executionMessages,ACTIVE_CODE_MODEL,3600,0.18);
+  let draft=await gatewayCompletion(executionMessages,ACTIVE_CODE_MODEL,3800,0.12);
 
-  // Passo 3: revisão independente do resultado.
+  // Passo 3: validação determinística + até 2 reparos.
+  let files=parseFileBlocks(draft);
+  let validationErrors=validateGeneratedFiles(files);
+  for(let repair=0;repair<2 && validationErrors.length;repair++){
+    console.log('[agent-validation-failed]',validationErrors);
+    const repairMessages=[
+      {role:'system',content:'Você é o reparador do CodeZero. Corrija TODOS os erros listados. Devolva a solução completa novamente usando <<<FILE:nome>>>...<<<END_FILE>>>. Não remova funcionalidades que já estavam corretas.'},
+      {role:'user',content:'PEDIDO ORIGINAL:\n'+message+'\n\nPROJETO ORIGINAL:\n'+project+'\n\nSOLUÇÃO ATUAL:\n'+draft+'\n\nERROS DETECTADOS:\n- '+validationErrors.join('\n- ')}
+    ];
+    draft=await gatewayCompletion(repairMessages,ACTIVE_CODE_MODEL,4000,0.08);
+    files=parseFileBlocks(draft);
+    validationErrors=validateGeneratedFiles(files);
+  }
+
+  // Passo 4: revisão semântica final.
   const reviewMessages=[
-    {role:'system',content:'Você é o revisor sênior do CodeZero. Revise a solução abaixo procurando bugs de sintaxe, variáveis inexistentes, arquivos incompletos, regressões, problemas mobile e divergência do pedido. Se houver problema, devolva a SOLUÇÃO CORRIGIDA COMPLETA usando os mesmos marcadores <<<FILE:nome>>>...<<<END_FILE>>>. Se estiver correta, devolva exatamente a solução recebida, sem comentários adicionais.'},
-    {role:'user',content:'PEDIDO:\n'+message+'\n\nPROJETO ORIGINAL:\n'+project+'\n\nSOLUÇÃO GERADA:\n'+draft}
+    {role:'system',content:'Você é o revisor sênior do CodeZero. Confira se a solução realmente cumpre o pedido, preserva o restante do projeto e é coerente entre HTML/CSS/JS. Se houver problema, devolva a SOLUÇÃO CORRIGIDA COMPLETA em blocos <<<FILE:nome>>>...<<<END_FILE>>>. Não responda apenas com explicações.'},
+    {role:'user',content:'PEDIDO:\n'+message+'\n\nPROJETO ORIGINAL:\n'+project+'\n\nSOLUÇÃO VALIDADA:\n'+draft}
   ];
   try{
-    const reviewed=await gatewayCompletion(reviewMessages,ACTIVE_CODE_MODEL,3800,0.08);
-    if(reviewed&&reviewed.includes('<<<FILE:')) draft=reviewed;
+    const reviewed=await gatewayCompletion(reviewMessages,ACTIVE_CODE_MODEL,4200,0.05);
+    const reviewedFiles=parseFileBlocks(reviewed);
+    const reviewedErrors=validateGeneratedFiles(reviewedFiles);
+    if(Object.keys(reviewedFiles).length && !reviewedErrors.length){
+      draft=reviewed;
+      files=reviewedFiles;
+      validationErrors=[];
+    }
   }catch(err){
     console.log('[reviewer-error]',String(err?.message||err));
   }
 
+  if(validationErrors.length){
+    throw new Error('Não consegui validar a alteração com segurança: '+validationErrors.join(' | '));
+  }
+
   return {
     response:draft,
-    provider:'brain-v8.2',
+    provider:'brain-v8.3-agent',
     model:ACTIVE_CODE_MODEL,
     mode:'code',
     plan,
+    validated:true,
+    changedFiles:Object.keys(files),
     searched:wantsWeb,
     sources:sources.map(({title,url})=>({title,url}))
   };
@@ -483,7 +510,7 @@ const server=http.createServer(async(req,res)=>{
     return sendJson(res,200,{
       status:'online',
       service:'CodeZero Railway',
-      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.2',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL
+      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL
     });
   }
   if(req.url==='/chat'&&req.method==='POST') return handleChat(req,res);
@@ -498,4 +525,4 @@ const server=http.createServer(async(req,res)=>{
     fs.createReadStream(file).pipe(res);
   });
 });
-server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'brain-v8.2'}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) providerSelfTest();});
+server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'brain-v8.3-agent'}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) providerSelfTest();});
