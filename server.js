@@ -42,6 +42,32 @@ async function readJson(req,max=2e6){
   }
   return JSON.parse(raw||'{}');
 }
+function extractResponseText(value, depth=0){
+  if(depth>6 || value==null) return '';
+  if(typeof value==='string') return value.trim();
+  if(typeof value==='number' || typeof value==='boolean') return String(value);
+  if(Array.isArray(value)){
+    for(const item of value){
+      const t=extractResponseText(item,depth+1);
+      if(t) return t;
+    }
+    return '';
+  }
+  if(typeof value==='object'){
+    const keys=['response','text','output_text','content','message','answer','completion','generated_text','result','data','choices'];
+    for(const key of keys){
+      if(Object.prototype.hasOwnProperty.call(value,key)){
+        const t=extractResponseText(value[key],depth+1);
+        if(t) return t;
+      }
+    }
+    for(const child of Object.values(value)){
+      const t=extractResponseText(child,depth+1);
+      if(t) return t;
+    }
+  }
+  return '';
+}
 async function workerChat(payload){
   const r=await fetch(WORKER_URL,{
     method:'POST',
@@ -57,16 +83,11 @@ async function workerChat(payload){
     err.status=r.status;
     throw err;
   }
-  const response=
-    data?.response||
-    data?.text||
-    data?.output_text||
-    data?.message||
-    data?.choices?.[0]?.message?.content||
-    data?.result?.response||
-    data?.result?.text||
-    (typeof data?.result==='string'?data.result:'');
-  if(!response) throw new Error('Worker respondeu sem texto');
+  const response=extractResponseText(data)||extractResponseText(raw);
+  if(!response) {
+    const preview=(raw||JSON.stringify(data)||'').slice(0,500);
+    throw new Error('Worker respondeu sem texto útil'+(preview?': '+preview:''));
+  }
   return {response};
 }
 async function providerChat(payload){
