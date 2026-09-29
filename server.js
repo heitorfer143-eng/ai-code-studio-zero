@@ -9,8 +9,8 @@ const AI_BASE_URL=(process.env.AI_BASE_URL||'').replace(/\/$/,'');
 const AI_API_KEY=process.env.AI_API_KEY||'';
 const AI_MODEL=process.env.AI_MODEL||'';
 const LEGACY_TEXT_URL=(process.env.LEGACY_TEXT_URL||'https://text.pollinations.ai').replace(/\/$/,'');
-const FREE_GATEWAY_URL=(process.env.FREE_GATEWAY_URL||'https://api.llmfaucet.dev/v1').replace(/\/$/,'');
-const FREE_GATEWAY_MODEL=process.env.FREE_GATEWAY_MODEL||'auto:coding';
+const FREE_GATEWAY_URL=(process.env.FREE_GATEWAY_URL||'https://api.llm7.io/v1').replace(/\/$/,'');
+const FREE_GATEWAY_MODEL=process.env.FREE_GATEWAY_MODEL||'codestral-latest';
 
 const mime={
   '.html':'text/html; charset=utf-8',
@@ -85,7 +85,7 @@ async function freeGatewayChat(payload){
     headers:{
       'content-type':'application/json',
       'accept':'application/json',
-      'authorization':'Bearer free'
+      'authorization':'Bearer unused'
     },
     body:JSON.stringify({
       model:FREE_GATEWAY_MODEL,
