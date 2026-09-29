@@ -11,6 +11,8 @@ const AI_MODEL=process.env.AI_MODEL||'';
 const LEGACY_TEXT_URL=(process.env.LEGACY_TEXT_URL||'https://text.pollinations.ai').replace(/\/$/,'');
 const FREE_GATEWAY_URL=(process.env.FREE_GATEWAY_URL||'https://api.llm7.io/v1').replace(/\/$/,'');
 const FREE_GATEWAY_MODEL=process.env.FREE_GATEWAY_MODEL||'codestral-latest';
+const IMAGE_BASE_URL=(process.env.IMAGE_BASE_URL||'https://gen.pollinations.ai').replace(/\/$/,'');
+const IMAGE_MODEL=process.env.IMAGE_MODEL||'flux';
 const CHAT_MODEL_CANDIDATES=(process.env.CHAT_MODEL_CANDIDATES||'gemini-3.1-flash-lite,deepseek-v4-flash:0731,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
 const CODE_MODEL_CANDIDATES=(process.env.CODE_MODEL_CANDIDATES||'deepseek-v4-flash:0731,gemini-3.1-flash-lite,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
 let ACTIVE_CHAT_MODEL=FREE_GATEWAY_MODEL;
@@ -124,6 +126,10 @@ async function researchWeb(query){
     sources.push({title:item.title,url:item.url,excerpt});
   }
   return sources;
+}
+function imageIntent(message){
+  const m=String(message||'').toLowerCase();
+  return /\b(gera|gere|gerar|cria|crie|criar|faça|fazer|imagem|image|foto|picture|ilustração|ilustracao|textura|texture|background|fundo|sprite|ícone|icone|thumbnail|banner|logo)\b/i.test(m) && /\b(imagem|image|foto|picture|ilustração|ilustracao|textura|texture|background|fundo|sprite|ícone|icone|thumbnail|banner|logo)\b/i.test(m);
 }
 function threeDIntent(message){
   const m=String(message||'').toLowerCase();
@@ -313,7 +319,7 @@ async function freeGatewayChat(payload){
   // Passo 2: executar com o plano.
   const knownFiles=projectFileNames(project);
   const executionMessages=[
-    {role:'system',content:'Você é o executor principal do CodeZero. Implemente EXATAMENTE o pedido. Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>. Preserve todo comportamento existente que não foi pedido para mudar. Não use pseudocódigo, TODOs ou placeholders. Para projetos 3D, entregue uma cena realmente executável: renderer WebGL, câmera, luz, resize, animation loop, controles adequados, objetos/terreno, UI quando necessário e fallback mobile. Use ES modules e CDN confiável (jsDelivr) para Three.js. Separe código em arquivos quando isso melhorar manutenção. Não diga que fez algo sem entregar o arquivo correspondente. Arquivos conhecidos: '+knownFiles.join(', ')},
+    {role:'system',content:'Você é o executor principal do CodeZero. Implemente EXATAMENTE o pedido. Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>. Preserve todo comportamento existente que não foi pedido para mudar. Não use pseudocódigo, TODOs ou placeholders. Para projetos 3D, entregue uma cena realmente executável: renderer WebGL, câmera, luz, resize, animation loop, controles adequados, objetos/terreno, UI quando necessário e fallback mobile. Use ES modules e CDN confiável (jsDelivr) para Three.js. Quando o pedido exigir uma imagem original, peça a ferramenta de imagem com exatamente <<<IMAGE:nome-do-arquivo.png|prompt detalhado em inglês>>>. Depois use assets/nome-do-arquivo.png no HTML/CSS/JS como URL do asset. Separe código em arquivos quando isso melhorar manutenção. Não diga que fez algo sem entregar o arquivo correspondente. Arquivos conhecidos: '+knownFiles.join(', ')},
     ...history.slice(-6),
     {role:'user',content:message+'\n\nPLANO TÉCNICO:\n'+plan+'\n\nPROJETO ATUAL:\n'+project+webContext}
   ];
@@ -502,6 +508,18 @@ const server=http.createServer(async(req,res)=>{
     });
     return res.end();
   }
+  if(pathnameSearch==='/image'&&req.method==='GET'){
+    try{
+      const u=new URL(req.url,'http://localhost');
+      const prompt=String(u.searchParams.get('prompt')||'').trim().slice(0,1200);
+      const model=String(u.searchParams.get('model')||IMAGE_MODEL).trim().slice(0,120);
+      if(!prompt) return sendJson(res,400,{error:'Prompt de imagem vazio'});
+      const imageUrl=IMAGE_BASE_URL+'/image/'+encodeURIComponent(prompt)+'?model='+encodeURIComponent(model)+'&nologo=true';
+      return sendJson(res,200,{ok:true,prompt,model,url:imageUrl});
+    }catch(e){
+      return sendJson(res,500,{error:'Falha ao preparar imagem',details:String(e?.message||e)});
+    }
+  }
   if(pathnameSearch==='/search'&&req.method==='GET'){
     try{
       const u=new URL(req.url,'http://localhost');
@@ -517,7 +535,7 @@ const server=http.createServer(async(req,res)=>{
     return sendJson(res,200,{
       status:'online',
       service:'CodeZero Railway',
-      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL
+      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,image:true
     });
   }
   if(req.url==='/chat'&&req.method==='POST') return handleChat(req,res);
