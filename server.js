@@ -156,30 +156,38 @@ function extractResponseText(value, depth=0){
   }
   return '';
 }
-async function gatewayCompletion(messages,model,maxTokens=1800,temperature=0.25){
-  const r=await fetch(FREE_GATEWAY_URL+'/chat/completions',{
-    method:'POST',
-    headers:{
-      'content-type':'application/json',
-      'accept':'application/json',
-      'authorization':'Bearer unused'
-    },
-    body:JSON.stringify({model,messages,temperature,max_tokens:maxTokens})
-  });
-  const raw=await r.text();
-  let data=null;
-  try{data=JSON.parse(raw)}catch{}
-  if(!r.ok){
-    const detail=data?.error?.message||data?.error||data?.details||raw||('HTTP '+r.status);
-    const err=new Error('Gateway '+model+' '+r.status+': '+String(detail).slice(0,500));
-    err.status=r.status;
-    throw err;
-  }
-  const response=extractResponseText(data)||extractResponseText(raw);
-  if(!response) throw new Error('Gateway '+model+' respondeu sem texto');
-  return response;
-}
+async function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 
+async function gatewayCompletion(messages,model,maxTokens=1800,temperature=0.25){
+  let lastError=null;
+  for(let attempt=0;attempt<4;attempt++){
+    if(attempt>0) await sleep(900+attempt*700);
+    const r=await fetch(FREE_GATEWAY_URL+'/chat/completions',{
+      method:'POST',
+      headers:{
+        'content-type':'application/json',
+        'accept':'application/json',
+        'authorization':'Bearer unused'
+      },
+      body:JSON.stringify({model,messages,temperature,max_tokens:maxTokens})
+    });
+    const raw=await r.text();
+    let data=null;
+    try{data=JSON.parse(raw)}catch{}
+    if(r.ok){
+      const response=extractResponseText(data)||extractResponseText(raw);
+      if(response) return response;
+      lastError=new Error('Gateway '+model+' respondeu sem texto');
+      continue;
+    }
+    const detail=data?.error?.message||data?.error||data?.details||raw||('HTTP '+r.status);
+    lastError=new Error('Gateway '+model+' '+r.status+': '+String(detail).slice(0,500));
+    lastError.status=r.status;
+    if(r.status!==429) throw lastError;
+    console.log('[gateway-retry]',model,'attempt',attempt+1);
+  }
+  throw lastError||new Error('Gateway indisponível');
+}
 async function firstWorkingModel(candidates,label){
   for(const model of candidates){
     try{
@@ -199,9 +207,9 @@ async function firstWorkingModel(candidates,label){
 }
 
 async function selectBestModels(){
-  ACTIVE_CHAT_MODEL=await firstWorkingModel(CHAT_MODEL_CANDIDATES,'chat');
-  ACTIVE_CODE_MODEL=await firstWorkingModel(CODE_MODEL_CANDIDATES,'code');
-  console.log('[brain-models]',JSON.stringify({chat:ACTIVE_CHAT_MODEL,code:ACTIVE_CODE_MODEL}));
+  ACTIVE_CHAT_MODEL=FREE_GATEWAY_MODEL;
+  ACTIVE_CODE_MODEL=FREE_GATEWAY_MODEL;
+  console.log('[brain-models]',JSON.stringify({chat:ACTIVE_CHAT_MODEL,code:ACTIVE_CODE_MODEL,mode:'anonymous-stable'}));
 }
 
 async function freeGatewayChat(payload){
@@ -299,10 +307,11 @@ async function publicFallbackChat(payload){
 async function providerSelfTest(){
   try{
     await selectBestModels();
-    const chat=await freeGatewayChat({message:'Oi, diga apenas OK.'});
-    console.log('[brain-chat-self-test]',chat.model,String(chat.response||'').slice(0,120));
-    const code=await freeGatewayChat({message:'Crie uma função JavaScript soma(a,b) que retorna a+b.',project:'ARQUIVO script.js:\n'});
-    console.log('[brain-code-self-test]',code.model,String(code.response||'').slice(0,180));
+    const chat=await gatewayCompletion([
+      {role:'system',content:'Responda somente OK.'},
+      {role:'user',content:'OK?'}
+    ],ACTIVE_CHAT_MODEL,16,0);
+    console.log('[brain-self-test]',ACTIVE_CHAT_MODEL,String(chat||'').slice(0,80));
   }catch(err){
     console.log('[brain-self-test-error]',String(err?.message||err));
   }
