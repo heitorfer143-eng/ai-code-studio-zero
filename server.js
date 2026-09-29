@@ -125,9 +125,14 @@ async function researchWeb(query){
   }
   return sources;
 }
+function threeDIntent(message){
+  const m=String(message||'').toLowerCase();
+  return /\b(3d|three\.?js|webgl|babylon|gltf|glb|modelo 3d|jogo 3d|game 3d|terreno|terrain|first person|primeira pessoa|third person|terceira pessoa|orbitcontrols|raycast|shader|scene|câmera 3d|camera 3d)\b/i.test(m);
+}
 function codingIntent(message){
   const m=String(message||'').toLowerCase().trim();
   if(!m) return false;
+  if(threeDIntent(m)) return true;
   return /\b(cria|crie|criar|construa|construir|faz|faça|fazer|adicione|adiciona|adicionar|coloca|coloque|inserir|insira|remove|remova|tirar|corrige|corrija|corrigir|arruma|arrume|conserta|conserte|altera|altere|muda|mude|editar|edite|implemente|implementa|programa|programe|coda|code|refatora|refatore|html|css|javascript|js|script|função|funcao|arquivo|index|botão|botao|site|página|pagina|app|componente|bug|erro de código|erro no código|erro no codigo)\b/i.test(m);
 }
 function extractResponseText(value, depth=0){
@@ -250,7 +255,7 @@ function validateGeneratedFiles(files){
     if(name.endsWith('.js')){
       if(!balancedPairs(content,'{','}')) errors.push(name+': chaves desbalanceadas.');
       if(!balancedPairs(content,'(',')')) errors.push(name+': parênteses desbalanceados.');
-      try{ new Function(content); }catch(err){ errors.push(name+': JavaScript inválido: '+String(err.message||err)); }
+      if(!/^\s*(import|export)\b/m.test(content)){ try{ new Function(content); }catch(err){ errors.push(name+': JavaScript inválido: '+String(err.message||err)); } }
     }
     if(name.endsWith('.css')&&!balancedPairs(content,'{','}')) errors.push(name+': CSS desbalanceado.');
     if(name.endsWith('.html')){
@@ -268,6 +273,7 @@ function projectFileNames(project){
 async function freeGatewayChat(payload){
   const message=String(payload.message||'').trim();
   const wantsCode=codingIntent(message);
+  const wants3D=threeDIntent(message);
   const wantsWeb=webIntent(message);
   const project=wantsCode?String(payload.project||'').slice(0,18000):'';
   const history=Array.isArray(payload.history)?payload.history.slice(-10):[];
@@ -293,7 +299,7 @@ async function freeGatewayChat(payload){
 
   // Passo 1: planejar sem editar arquivos.
   const planningMessages=[
-    {role:'system',content:'Você é o planejador técnico do CodeZero. Analise o pedido e o projeto. Produza um plano curto, identifique arquivos afetados, riscos, dependências e critérios de sucesso. NÃO escreva blocos <<<FILE>>> ainda.'},
+    {role:'system',content:'Você é o planejador técnico do CodeZero. Analise o pedido e o projeto. Produza um plano curto, identifique arquivos afetados, riscos, dependências e critérios de sucesso. Para projetos 3D planeje cena, câmera, renderer, luzes, materiais, controles, game loop, colisões/raycast, responsividade, performance e assets. Prefira Three.js por ES modules via jsDelivr quando o usuário não escolher engine. NÃO escreva blocos <<<FILE>>> ainda.'},
     ...history.slice(-6),
     {role:'user',content:message+'\n\nPROJETO:\n'+project+webContext}
   ];
@@ -307,7 +313,7 @@ async function freeGatewayChat(payload){
   // Passo 2: executar com o plano.
   const knownFiles=projectFileNames(project);
   const executionMessages=[
-    {role:'system',content:'Você é o executor principal do CodeZero. Implemente EXATAMENTE o pedido. Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>. Preserve todo comportamento existente que não foi pedido para mudar. Não use pseudocódigo, TODOs ou placeholders. Não diga que fez algo sem entregar o arquivo correspondente. Arquivos conhecidos: '+knownFiles.join(', ')},
+    {role:'system',content:'Você é o executor principal do CodeZero. Implemente EXATAMENTE o pedido. Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>. Preserve todo comportamento existente que não foi pedido para mudar. Não use pseudocódigo, TODOs ou placeholders. Para projetos 3D, entregue uma cena realmente executável: renderer WebGL, câmera, luz, resize, animation loop, controles adequados, objetos/terreno, UI quando necessário e fallback mobile. Use ES modules e CDN confiável (jsDelivr) para Three.js. Separe código em arquivos quando isso melhorar manutenção. Não diga que fez algo sem entregar o arquivo correspondente. Arquivos conhecidos: '+knownFiles.join(', ')},
     ...history.slice(-6),
     {role:'user',content:message+'\n\nPLANO TÉCNICO:\n'+plan+'\n\nPROJETO ATUAL:\n'+project+webContext}
   ];
@@ -329,7 +335,7 @@ async function freeGatewayChat(payload){
 
   // Passo 4: revisão semântica final.
   const reviewMessages=[
-    {role:'system',content:'Você é o revisor sênior do CodeZero. Confira se a solução realmente cumpre o pedido, preserva o restante do projeto e é coerente entre HTML/CSS/JS. Se houver problema, devolva a SOLUÇÃO CORRIGIDA COMPLETA em blocos <<<FILE:nome>>>...<<<END_FILE>>>. Não responda apenas com explicações.'},
+    {role:'system',content:'Você é o revisor sênior do CodeZero. Confira se a solução realmente cumpre o pedido, preserva o restante do projeto e é coerente entre HTML/CSS/JS. Em 3D, verifique imports ES module, renderer anexado ao DOM, câmera válida, resize, requestAnimationFrame, iluminação/material, controles, pointer lock/orbit, colisões quando pedidas e compatibilidade mobile. Se houver problema, devolva a SOLUÇÃO CORRIGIDA COMPLETA em blocos <<<FILE:nome>>>...<<<END_FILE>>>. Não responda apenas com explicações.'},
     {role:'user',content:'PEDIDO:\n'+message+'\n\nPROJETO ORIGINAL:\n'+project+'\n\nSOLUÇÃO VALIDADA:\n'+draft}
   ];
   try{
@@ -356,6 +362,7 @@ async function freeGatewayChat(payload){
     mode:'code',
     plan,
     validated:true,
+    projectType:wants3D?'3d':'web',
     changedFiles:Object.keys(files),
     searched:wantsWeb,
     sources:sources.map(({title,url})=>({title,url}))
