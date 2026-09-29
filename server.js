@@ -163,6 +163,10 @@ function imageIntent(message){
   const m=String(message||'').toLowerCase();
   return /\b(gera|gere|gerar|cria|crie|criar|faça|fazer|imagem|image|foto|picture|ilustração|ilustracao|textura|texture|background|fundo|sprite|ícone|icone|thumbnail|banner|logo)\b/i.test(m) && /\b(imagem|image|foto|picture|ilustração|ilustracao|textura|texture|background|fundo|sprite|ícone|icone|thumbnail|banner|logo)\b/i.test(m);
 }
+function godotIntent(message){
+  const m=String(message||'').toLowerCase();
+  return /\b(godot|gdscript|project\.godot|\.tscn|\.tres|\.gdshader|node3d|characterbody3d|camera3d|meshinstance3d|rigidbody3d|area3d|animationplayer|navigationagent3d|multiplayerpeer|enetmultiplayerpeer)\b/i.test(m);
+}
 function threeDIntent(message){
   const m=String(message||'').toLowerCase();
   return /\b(3d|three\.?js|webgl|babylon|gltf|glb|modelo 3d|jogo 3d|game 3d|terreno|terrain|first person|primeira pessoa|third person|terceira pessoa|orbitcontrols|raycast|shader|scene|câmera 3d|camera 3d)\b/i.test(m);
@@ -170,7 +174,7 @@ function threeDIntent(message){
 function codingIntent(message){
   const m=String(message||'').toLowerCase().trim();
   if(!m) return false;
-  if(threeDIntent(m)) return true;
+  if(godotIntent(m)||threeDIntent(m)) return true;
   return /\b(cria|crie|criar|construa|construir|faz|faça|fazer|adicione|adiciona|adicionar|coloca|coloque|inserir|insira|remove|remova|tirar|corrige|corrija|corrigir|arruma|arrume|conserta|conserte|altera|altere|muda|mude|editar|edite|implemente|implementa|programa|programe|coda|code|refatora|refatore|html|css|javascript|js|script|função|funcao|arquivo|index|botão|botao|site|página|pagina|app|componente|bug|erro de código|erro no código|erro no codigo)\b/i.test(m);
 }
 function extractResponseText(value, depth=0){
@@ -285,6 +289,31 @@ function balancedPairs(text,open,close){
   return depth===0 && !quote;
 }
 
+function validateGodotFiles(files){
+  const errors=[];
+  for(const [name,content] of Object.entries(files)){
+    if(name==='project.godot'){
+      if(!/^\s*\[application\]/m.test(content)) errors.push('project.godot: falta seção [application].');
+      if(!/^\s*\[display\]/m.test(content)&&!/^\s*\[rendering\]/m.test(content)) errors.push('project.godot: configuração mínima incompleta.');
+    }
+    if(name.endsWith('.gd')){
+      const lines=String(content).split('\n');
+      for(let i=0;i<lines.length;i++){
+        if(/^\s*func\s+\w+\s*\([^)]*\)\s*$/.test(lines[i])) errors.push(name+': linha '+(i+1)+' parece função sem dois-pontos.');
+      }
+      if(/\bextends\s*$/.test(content)) errors.push(name+': extends incompleto.');
+    }
+    if(name.endsWith('.tscn')){
+      if(!/^\s*\[gd_scene\b/m.test(content)) errors.push(name+': cena sem cabeçalho [gd_scene].');
+      if(!/^\s*\[node\b/m.test(content)) errors.push(name+': cena sem nodes.');
+    }
+    if(name.endsWith('.gdshader')){
+      if(!/\bshader_type\b/.test(content)) errors.push(name+': shader sem shader_type.');
+    }
+  }
+  return errors;
+}
+
 function validateGeneratedFiles(files){
   const errors=[];
   if(!Object.keys(files).length) errors.push('Nenhum bloco de arquivo foi entregue.');
@@ -302,6 +331,7 @@ function validateGeneratedFiles(files){
       if(a!==b) errors.push(name+': tags script desbalanceadas.');
     }
   }
+  errors.push(...validateGodotFiles(files));
   return errors;
 }
 
@@ -311,6 +341,7 @@ function projectFileNames(project){
 async function freeGatewayChat(payload){
   const message=String(payload.message||'').trim();
   const wantsCode=codingIntent(message);
+  const wantsGodot=godotIntent(message)||/ARQUIVO project\.godot:/m.test(String(payload.project||''));
   const wants3D=threeDIntent(message);
   const wantsWeb=webIntent(message);
   const project=wantsCode?String(payload.project||'').slice(0,18000):'';
@@ -337,7 +368,7 @@ async function freeGatewayChat(payload){
 
   // Passo 1: planejar sem editar arquivos.
   const planningMessages=[
-    {role:'system',content:'Você é o planejador técnico do CodeZero. Analise o pedido e o projeto. Produza um plano curto, identifique arquivos afetados, riscos, dependências e critérios de sucesso. Para projetos 3D planeje cena, câmera, renderer, luzes, materiais, controles, game loop, colisões/raycast, responsividade, performance e assets. Prefira Three.js por ES modules via jsDelivr quando o usuário não escolher engine. NÃO escreva blocos <<<FILE>>> ainda.'},
+    {role:'system',content:'Você é o planejador técnico do CodeZero. Analise o pedido e o projeto. Produza um plano curto, identifique arquivos afetados, riscos, dependências e critérios de sucesso. Para projetos Godot use Godot 4.x e planeje árvore de cenas, nós, scripts GDScript, Input Map, recursos, colisões, câmera, física e multiplayer quando pedido. Para 3D em Godot use Node3D/CharacterBody3D/Camera3D/CollisionShape3D/MeshInstance3D e cenas .tscn. Não converta pedidos Godot para Three.js. Para projetos web 3D que NÃO sejam Godot, planeje renderer, câmera, luzes, materiais e controles. NÃO escreva blocos <<<FILE>>> ainda.'},
     ...history.slice(-6),
     {role:'user',content:message+'\n\nPROJETO:\n'+project+webContext}
   ];
@@ -351,7 +382,7 @@ async function freeGatewayChat(payload){
   // Passo 2: executar com o plano.
   const knownFiles=projectFileNames(project);
   const executionMessages=[
-    {role:'system',content:'Você é o executor principal do CodeZero. Implemente EXATAMENTE o pedido. Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>. Preserve todo comportamento existente que não foi pedido para mudar. Não use pseudocódigo, TODOs ou placeholders. Para projetos 3D, entregue uma cena realmente executável: renderer WebGL, câmera, luz, resize, animation loop, controles adequados, objetos/terreno, UI quando necessário e fallback mobile. Use ES modules e CDN confiável (jsDelivr) para Three.js. Quando o pedido exigir uma imagem original, peça a ferramenta de imagem com exatamente <<<IMAGE:nome-do-arquivo.png|prompt detalhado em inglês>>>. Quando precisar modificar uma imagem existente, use exatamente <<<EDIT_IMAGE:imagem-origem.png|imagem-destino.png|instrução detalhada em inglês>>>. Se disser que criou ou editou uma imagem, você DEVE emitir o marcador correspondente. Depois use assets/nome-do-arquivo.png no HTML/CSS/JS como URL do asset. Separe código em arquivos quando isso melhorar manutenção. Não diga que fez algo sem entregar o arquivo correspondente. Arquivos conhecidos: '+knownFiles.join(', ')},
+    {role:'system',content:'Você é o executor principal do CodeZero. Implemente EXATAMENTE o pedido. Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>. Preserve todo comportamento existente que não foi pedido para mudar. Não use pseudocódigo, TODOs ou placeholders. Para projetos Godot, entregue arquivos reais de Godot 4.x: project.godot, cenas .tscn, scripts .gd e recursos necessários. Use APIs atuais do Godot 4, caminhos res://, Input Map coerente e sinais/nós compatíveis. Para 3D Godot, use nós e física do engine, nunca Three.js. Para projetos web 3D que não sejam Godot, use WebGL/Three.js quando apropriado. Quando o pedido exigir uma imagem original, peça a ferramenta de imagem com exatamente <<<IMAGE:nome-do-arquivo.png|prompt detalhado em inglês>>>. Quando precisar modificar uma imagem existente, use exatamente <<<EDIT_IMAGE:imagem-origem.png|imagem-destino.png|instrução detalhada em inglês>>>. Se disser que criou ou editou uma imagem, você DEVE emitir o marcador correspondente. Depois use assets/nome-do-arquivo.png no HTML/CSS/JS como URL do asset. Separe código em arquivos quando isso melhorar manutenção. Não diga que fez algo sem entregar o arquivo correspondente. Arquivos conhecidos: '+knownFiles.join(', ')},
     ...history.slice(-6),
     {role:'user',content:message+'\n\nPLANO TÉCNICO:\n'+plan+'\n\nPROJETO ATUAL:\n'+project+webContext}
   ];
@@ -373,7 +404,7 @@ async function freeGatewayChat(payload){
 
   // Passo 4: revisão semântica final.
   const reviewMessages=[
-    {role:'system',content:'Você é o revisor sênior do CodeZero. Confira se a solução realmente cumpre o pedido, preserva o restante do projeto e é coerente entre HTML/CSS/JS. Em 3D, verifique imports ES module, renderer anexado ao DOM, câmera válida, resize, requestAnimationFrame, iluminação/material, controles, pointer lock/orbit, colisões quando pedidas e compatibilidade mobile. Se houver problema, devolva a SOLUÇÃO CORRIGIDA COMPLETA em blocos <<<FILE:nome>>>...<<<END_FILE>>>. Não responda apenas com explicações.'},
+    {role:'system',content:'Você é o revisor sênior do CodeZero. Confira se a solução realmente cumpre o pedido, preserva o restante do projeto e é coerente entre HTML/CSS/JS. Em Godot, verifique sintaxe GDScript Godot 4, caminhos res://, nomes de nós, NodePath, Input Map, cenas .tscn, colisões, câmera e referências entre arquivos. Em 3D web que não seja Godot, verifique renderer/câmera/loop/controles. Se houver problema, devolva a SOLUÇÃO CORRIGIDA COMPLETA em blocos <<<FILE:nome>>>...<<<END_FILE>>>. Não responda apenas com explicações.'},
     {role:'user',content:'PEDIDO:\n'+message+'\n\nPROJETO ORIGINAL:\n'+project+'\n\nSOLUÇÃO VALIDADA:\n'+draft}
   ];
   try{
@@ -400,7 +431,7 @@ async function freeGatewayChat(payload){
     mode:'code',
     plan,
     validated:true,
-    projectType:wants3D?'3d':'web',
+    projectType:wantsGodot?'godot':(wants3D?'3d':'web'),
     changedFiles:Object.keys(files),
     searched:wantsWeb,
     sources:sources.map(({title,url})=>({title,url}))
