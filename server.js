@@ -212,6 +212,59 @@ async function selectBestModels(){
   console.log('[brain-models]',JSON.stringify({chat:ACTIVE_CHAT_MODEL,code:ACTIVE_CODE_MODEL,mode:'anonymous-stable'}));
 }
 
+function parseFileBlocks(text){
+  const files={};
+  const re=/<<<FILE:([^>]+)>>>([\s\S]*?)<<<END_FILE>>>/g;
+  let m;
+  while((m=re.exec(String(text||'')))){
+    const name=m[1].trim().replace(/^\/+/, '');
+    if(!/^[\w.\-\/]+$/.test(name)) continue;
+    files[name]=m[2].replace(/^\n/,'').replace(/\n$/,'');
+  }
+  return files;
+}
+
+function balancedPairs(text,open,close){
+  let depth=0,quote=null,escaped=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(quote){
+      if(escaped){escaped=false;continue;}
+      if(ch==='\\\\'){escaped=true;continue;}
+      if(ch===quote) quote=null;
+      continue;
+    }
+    if(ch==='"'||ch==="'"||ch==='`'){quote=ch;continue;}
+    if(ch===open) depth++;
+    if(ch===close) depth--;
+    if(depth<0) return false;
+  }
+  return depth===0 && !quote;
+}
+
+function validateGeneratedFiles(files){
+  const errors=[];
+  if(!Object.keys(files).length) errors.push('Nenhum bloco de arquivo foi entregue.');
+  for(const [name,content] of Object.entries(files)){
+    if(!String(content).trim()) errors.push(name+': arquivo vazio.');
+    if(name.endsWith('.js')){
+      if(!balancedPairs(content,'{','}')) errors.push(name+': chaves desbalanceadas.');
+      if(!balancedPairs(content,'(',')')) errors.push(name+': parênteses desbalanceados.');
+      try{ new Function(content); }catch(err){ errors.push(name+': JavaScript inválido: '+String(err.message||err)); }
+    }
+    if(name.endsWith('.css')&&!balancedPairs(content,'{','}')) errors.push(name+': CSS desbalanceado.');
+    if(name.endsWith('.html')){
+      if(!/<[a-z][\s\S]*>/i.test(content)) errors.push(name+': HTML inválido.');
+      const a=(content.match(/<script\b/gi)||[]).length,b=(content.match(/<\/script>/gi)||[]).length;
+      if(a!==b) errors.push(name+': tags script desbalanceadas.');
+    }
+  }
+  return errors;
+}
+
+function projectFileNames(project){
+  return [...String(project||'').matchAll(/^ARQUIVO\s+([^:]+):/gm)].map(m=>m[1].trim());
+}
 async function freeGatewayChat(payload){
   const message=String(payload.message||'').trim();
   const wantsCode=codingIntent(message);
