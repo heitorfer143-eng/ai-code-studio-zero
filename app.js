@@ -116,6 +116,7 @@ function resetProject(){
   active='index.html';
   save();
   saveAssets();
+  renderAssets();
   $('#editor').value=files[active];
   tabs();
   lines();
@@ -130,6 +131,7 @@ async function generateImageAsset(name,prompt){
   if(!r.ok||!data?.url) throw new Error(data?.details||data?.error||'Falha ao gerar imagem');
   assets[cleanName]=data.url;
   saveAssets();
+  renderAssets();
   return {name:cleanName,url:data.url};
 }
 async function manualImage(){
@@ -170,6 +172,116 @@ async function processImageRequests(text){
   return made;
 }
 
+function renderAssets(){
+  const root=$('#assetList');
+  if(!root) return;
+  root.textContent='';
+  const entries=Object.entries(assets);
+  if(!entries.length){
+    const empty=document.createElement('div');
+    empty.className='assetEmpty';
+    empty.textContent='Nenhuma imagem ainda';
+    root.append(empty);
+    return;
+  }
+  for(const [name,url] of entries){
+    const card=document.createElement('button');
+    card.className='assetCard';
+    card.title='Toque para editar • segure/copiar caminho assets/'+name;
+    const img=document.createElement('img');
+    img.src=url;
+    img.alt=name;
+    const label=document.createElement('span');
+    label.textContent=name;
+    card.append(img,label);
+    card.onclick=()=>manualEditImage(name);
+    card.oncontextmenu=e=>{e.preventDefault();navigator.clipboard?.writeText('assets/'+name);status('📋 Copiado: assets/'+name);};
+    root.append(card);
+  }
+}
+
+async function importLocalImage(file){
+  if(!file) return null;
+  if(!String(file.type||'').startsWith('image/')) throw new Error('Selecione um arquivo de imagem.');
+  if(file.size>8*1024*1024) throw new Error('Imagem maior que 8 MB.');
+  const dataUrl=await new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>resolve(String(reader.result||''));
+    reader.onerror=()=>reject(new Error('Falha ao ler a imagem.'));
+    reader.readAsDataURL(file);
+  });
+  const name=String(file.name||'upload.png').replace(/[^\w.\-]/g,'-');
+  assets[name]=dataUrl;
+  saveAssets();
+  renderAssets();
+  return {name,url:dataUrl};
+}
+
+async function manualUploadImage(){
+  const input=document.createElement('input');
+  input.type='file';
+  input.accept='image/*';
+  input.onchange=async()=>{
+    try{
+      const out=await importLocalImage(input.files?.[0]);
+      if(out) status('📤 Imagem adicionada: assets/'+out.name);
+    }catch(e){status('⚠️ '+e.message);}
+  };
+  input.click();
+}
+
+async function editImageAsset(sourceName,targetName,promptText){
+  const source=assets[sourceName];
+  if(!source) throw new Error('Asset não encontrado: '+sourceName);
+  const payload={filename:sourceName,prompt:promptText,model:'kontext',size:'1024x1024'};
+  if(String(source).startsWith('data:image/')) payload.dataUrl=source;
+  else payload.sourceUrl=source;
+  const r=await fetch('/image/edit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
+  const data=await r.json();
+  if(!r.ok) throw new Error(data?.details||data?.error||'Falha ao editar imagem.');
+  let finalUrl=data.url||'';
+  if(!finalUrl&&data.dataUrl) finalUrl=data.dataUrl;
+  if(!finalUrl) throw new Error('Edição não retornou imagem.');
+  const cleanTarget=String(targetName||'edited-image.png').replace(/^assets\//,'').replace(/[^\w.\-]/g,'-');
+  assets[cleanTarget]=finalUrl;
+  saveAssets();
+  renderAssets();
+  return {name:cleanTarget,url:finalUrl};
+}
+
+async function manualEditImage(preselected=''){
+  const names=Object.keys(assets);
+  if(!names.length){status('⚠️ Adicione ou gere uma imagem primeiro.');return;}
+  const sourceName=preselected||prompt('Asset de origem:\n'+names.join('\n'),names[0]);
+  if(!sourceName||!assets[sourceName]) return;
+  const targetName=prompt('Salvar imagem editada como:',sourceName.replace(/(\.[^.]+)?$/,'-editado.png'));
+  if(!targetName) return;
+  const instruction=prompt('O que deseja modificar na imagem?');
+  if(!instruction) return;
+  status('🛠️ Editando imagem…');
+  try{
+    const out=await editImageAsset(sourceName,targetName,instruction);
+    const chat=activeChat();
+    chat.messages.push({role:'assistant',content:'Imagem editada: assets/'+out.name,display:'🛠️ Imagem editada: assets/'+out.name+'\n'+out.url});
+    chat.updatedAt=Date.now();
+    saveChats();
+    renderMessages();
+    status('✅ Imagem editada: assets/'+out.name);
+  }catch(e){status('⚠️ '+e.message);}
+}
+
+async function processEditImageRequests(text){
+  const re=/<<<EDIT_IMAGE:([^|>]+)\|([^|>]+)\|([\s\S]*?)>>>/g;
+  const jobs=[];
+  let m;
+  while((m=re.exec(String(text||'')))) jobs.push({source:m[1].trim().replace(/^assets\//,''),target:m[2].trim().replace(/^assets\//,''),prompt:m[3].trim()});
+  const made=[];
+  for(const job of jobs){
+    try{made.push(await editImageAsset(job.source,job.target,job.prompt));}
+    catch(e){console.error('image edit failed',job,e);}
+  }
+  return made;
+}
 function tabs(){
   const n=$('#tabs');
   n.textContent='';
@@ -265,7 +377,7 @@ function applyFiles(text){
   return changed;
 }
 function visibleReply(text){
-  return String(text||'').replace(/<<<FILE:[^>]+>>>[\s\S]*?(?:<<<END_FILE>>>|$)/g,'').replace(/<<<IMAGE:[\s\S]*?>>>/g,'').trim();
+  return String(text||'').replace(/<<<FILE:[^>]+>>>[\s\S]*?(?:<<<END_FILE>>>|$)/g,'').replace(/<<<IMAGE:[\s\S]*?>>>/g,'').replace(/<<<EDIT_IMAGE:[\s\S]*?>>>/g,'').trim();
 }
 function extractText(value,raw='',depth=0){
   if(depth>6||value==null) return '';
@@ -317,8 +429,9 @@ async function send(){
     const full=extractText(data,raw);
     if(!full.trim()) throw new Error('O CodeZero respondeu vazio.');
     const generatedImages=await processImageRequests(full);
+    const editedImages=await processEditImageRequests(full);
     const changed=applyFiles(full);
-    const clean=(visibleReply(full)||'Projeto atualizado.')+(changed.length?'\n\n✓ '+changed.join(', '):'')+(generatedImages.length?'\n🖼️ '+generatedImages.map(x=>'assets/'+x.name).join(', '):'');
+    const clean=(visibleReply(full)||'Projeto atualizado.')+(changed.length?'\n\n✓ '+changed.join(', '):'')+(generatedImages.length?'\n🖼️ Geradas: '+generatedImages.map(x=>'assets/'+x.name).join(', '):'')+(editedImages.length?'\n🛠️ Editadas: '+editedImages.map(x=>'assets/'+x.name).join(', '):'');
     chat.messages.push({role:'assistant',content:full,display:clean,sources:data?.sources||[]});
     chat.updatedAt=Date.now();
     saveChats();
@@ -429,10 +542,13 @@ $('#newChat').onclick=createChat;
 if($('#new3D')) $('#new3D').onclick=create3DProject;
 if($('#resetProject')) $('#resetProject').onclick=resetProject;
 if($('#imageTool')) $('#imageTool').onclick=manualImage;
+if($('#uploadImage')) $('#uploadImage').onclick=manualUploadImage;
+if($('#editImageTool')) $('#editImageTool').onclick=()=>manualEditImage();
 
 $('#editor').value=files[active];
 renderChatList();
 renderMessages();
+renderAssets();
 tabs();
 lines();
 run();
