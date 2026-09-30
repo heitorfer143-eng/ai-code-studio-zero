@@ -23,9 +23,153 @@ let checkpointIndex=checkpoints.length-1;
 let taskProgressTimer=null;
 let devopsCsrf='';
 let devopsState={github:{connected:false},railway:{connected:false}};
+let authState={authenticated:false,username:'',csrf:'',persistent:false,storage:'local-ephemeral'};
+let cloudSaveTimer=null;
+let cloudSaving=false;
 let chats=loadChats();
 let activeChatId=localStorage.getItem(ACTIVE_CHAT_KEY)||chats[0].id;
 if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
+
+function workspaceState(){
+  if(files[active]!=null) files[active]=$('#editor').value;
+  return {
+    version:13,
+    files,
+    assets,
+    projectMemory,
+    checkpoints,
+    checkpointIndex,
+    chats,
+    activeChatId,
+    active,
+    savedAt:Date.now()
+  };
+}
+function applyWorkspaceState(state){
+  if(!state||typeof state!=='object') return false;
+  files=state.files&&typeof state.files==='object'?state.files:files;
+  assets=state.assets&&typeof state.assets==='object'?state.assets:{};
+  projectMemory=Array.isArray(state.projectMemory)?state.projectMemory:[];
+  checkpoints=Array.isArray(state.checkpoints)?state.checkpoints:[];
+  checkpointIndex=Number.isInteger(state.checkpointIndex)?state.checkpointIndex:checkpoints.length-1;
+  chats=Array.isArray(state.chats)&&state.chats.length?state.chats:[freshChat()];
+  activeChatId=state.activeChatId&&chats.some(c=>c.id===state.activeChatId)?state.activeChatId:chats[0].id;
+  active=state.active&&files[state.active]!=null?state.active:Object.keys(files)[0];
+  localStorage.setItem('zero.files',JSON.stringify(files));
+  localStorage.setItem(ASSET_KEY,JSON.stringify(assets));
+  localStorage.setItem(PROJECT_MEMORY_KEY,JSON.stringify(projectMemory));
+  localStorage.setItem(CHECKPOINT_KEY,JSON.stringify(checkpoints));
+  localStorage.setItem(CHAT_KEY,JSON.stringify(chats));
+  localStorage.setItem(ACTIVE_CHAT_KEY,activeChatId);
+  $('#editor').value=files[active]||'';
+  renderChatList(); renderMessages(); renderAssets(); tabs(); renderFileTree(); lines(); run(); updateCheckpointButtons();
+  return true;
+}
+function renderAccountState(){
+  $('#accountLoggedOut')?.classList.toggle('hidden',authState.authenticated);
+  $('#accountLoggedIn')?.classList.toggle('hidden',!authState.authenticated);
+  if($('#accountName')) $('#accountName').textContent=authState.username||'';
+  if($('#accountBtn')) $('#accountBtn').textContent=authState.authenticated?'👤 '+authState.username:'👤 Conta';
+  const saveEl=$('#cloudSaveStatus');
+  if(saveEl){
+    saveEl.textContent=authState.authenticated?(authState.persistent?'☁ Salvo em conta':'⚠ Conta temporária'):'Local';
+    saveEl.classList.toggle('warn',authState.authenticated&&!authState.persistent);
+  }
+  const info=$('#accountStorageInfo');
+  if(info){
+    info.textContent=authState.persistent
+      ? 'Salvamento persistente em PostgreSQL.'
+      : '⚠ O banco PostgreSQL ainda não está conectado. A conta funciona, mas o servidor pode perder dados após um novo deploy.';
+  }
+}
+async function authFetch(url,options={}){
+  const opts={credentials:'same-origin',...options,headers:{...(options.headers||{})}};
+  if((opts.method||'GET').toUpperCase()!=='GET'){
+    opts.headers['Content-Type']=opts.headers['Content-Type']||'application/json';
+    if(authState.csrf) opts.headers['X-CSRF-Token']=authState.csrf;
+  }
+  const r=await fetch(url,opts);
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(data?.details||data?.error||('HTTP '+r.status));
+  return data;
+}
+function showAccountResult(text,error=false){
+  const el=$('#accountResult'); if(!el) return;
+  el.textContent=String(text||''); el.classList.toggle('error',!!error);
+}
+async function initAccount(){
+  try{
+    const data=await authFetch('/auth/session');
+    authState={authenticated:!!data.authenticated,username:data.username||'',csrf:data.csrf||'',persistent:!!data.persistent,storage:data.storage||'local-ephemeral'};
+    renderAccountState();
+  }catch(e){console.warn('auth init',e);}
+}
+async function completeLogin(data){
+  authState={authenticated:true,username:data.username||'',csrf:data.csrf||'',persistent:!!data.persistent,storage:data.storage||'local-ephemeral'};
+  renderAccountState();
+  const cloud=await authFetch('/account/state');
+  if(cloud.state){
+    const useCloud=confirm('Já existe um projeto salvo nesta conta. Carregar o salvo da conta agora?\nCancelar mantém o que está neste navegador.');
+    if(useCloud){
+      applyWorkspaceState(cloud.state);
+      showAccountResult('Projeto salvo carregado.');
+    }else{
+      await saveCloudNow();
+      showAccountResult('Projeto deste navegador enviado para a conta.');
+    }
+  }else{
+    await saveCloudNow();
+    showAccountResult('Conta conectada e seu projeto atual foi salvo.');
+  }
+}
+async function registerAccount(){
+  const username=String($('#accountUsername')?.value||'').trim();
+  const password=String($('#accountPassword')?.value||'');
+  try{
+    const data=await authFetch('/auth/register',{method:'POST',body:JSON.stringify({username,password})});
+    await completeLogin(data);
+  }catch(e){showAccountResult(e.message,true);}
+}
+async function loginAccount(){
+  const username=String($('#accountUsername')?.value||'').trim();
+  const password=String($('#accountPassword')?.value||'');
+  try{
+    const data=await authFetch('/auth/login',{method:'POST',body:JSON.stringify({username,password})});
+    await completeLogin(data);
+  }catch(e){showAccountResult(e.message,true);}
+}
+async function logoutAccount(){
+  try{await authFetch('/auth/logout',{method:'POST',body:'{}'});}catch{}
+  authState={authenticated:false,username:'',csrf:'',persistent:false,storage:'local-ephemeral'};
+  renderAccountState(); showAccountResult('Sessão encerrada.');
+}
+async function saveCloudNow(){
+  if(!authState.authenticated||cloudSaving) return;
+  cloudSaving=true;
+  const saveEl=$('#cloudSaveStatus'); if(saveEl) saveEl.textContent='☁ Salvando…';
+  try{
+    const data=await authFetch('/account/state',{method:'POST',body:JSON.stringify({state:workspaceState()})});
+    if(saveEl) saveEl.textContent=data.persistent?'☁ Salvo':'⚠ Salvo temporariamente';
+  }catch(e){
+    if(saveEl) saveEl.textContent='⚠ Erro ao salvar';
+    console.warn('cloud save',e);
+  }finally{cloudSaving=false;}
+}
+function scheduleCloudSave(){
+  if(!authState.authenticated) return;
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer=setTimeout(saveCloudNow,1200);
+}
+async function loadCloudNow(){
+  if(!authState.authenticated) return;
+  try{
+    const data=await authFetch('/account/state');
+    if(data.state){applyWorkspaceState(data.state);showAccountResult('Projeto carregado da conta.');}
+    else showAccountResult('Nenhum projeto salvo ainda.');
+  }catch(e){showAccountResult(e.message,true);}
+}
+function openAccount(){$('#accountModal')?.classList.remove('hidden');renderAccountState();}
+function closeAccount(){$('#accountModal')?.classList.add('hidden');}
 
 async function devopsFetch(url,options={}){
   const opts={credentials:'same-origin',...options,headers:{...(options.headers||{})}};
@@ -246,6 +390,7 @@ function loadChats(){
 }
 function saveChats(){
   localStorage.setItem(CHAT_KEY,JSON.stringify(chats.slice(0,50)));
+  scheduleCloudSave();
   localStorage.setItem(ACTIVE_CHAT_KEY,activeChatId);
 }
 function activeChat(){
@@ -323,12 +468,13 @@ function closeChatDrawer(){
   $('#drawerShade').classList.remove('show');
 }
 
-function save(){localStorage.setItem('zero.files',JSON.stringify(files))}
-function saveAssets(){localStorage.setItem(ASSET_KEY,JSON.stringify(assets))}
+function save(){localStorage.setItem('zero.files',JSON.stringify(files));scheduleCloudSave()}
+function saveAssets(){localStorage.setItem(ASSET_KEY,JSON.stringify(assets));scheduleCloudSave()}
 function saveCheckpoints(){
   checkpoints=checkpoints.slice(-20);
   checkpointIndex=Math.min(checkpointIndex,checkpoints.length-1);
   localStorage.setItem(CHECKPOINT_KEY,JSON.stringify(checkpoints));
+  scheduleCloudSave();
   updateCheckpointButtons();
 }
 function createCheckpoint(label='Checkpoint'){
@@ -436,6 +582,7 @@ function createFileManual(){
 
 function saveProjectMemory(){
   localStorage.setItem(PROJECT_MEMORY_KEY,JSON.stringify(projectMemory.slice(-30)));
+  scheduleCloudSave();
 }
 function rememberProjectChange(request,changedFiles,meta={}){
   if(!Array.isArray(changedFiles)||!changedFiles.length) return;
@@ -1248,6 +1395,13 @@ window.onmessage=e=>{
 };
 
 $('#send').onclick=send;
+if($('#accountBtn')) $('#accountBtn').onclick=openAccount;
+if($('#accountClose')) $('#accountClose').onclick=closeAccount;
+if($('#accountRegister')) $('#accountRegister').onclick=registerAccount;
+if($('#accountLogin')) $('#accountLogin').onclick=loginAccount;
+if($('#accountLogout')) $('#accountLogout').onclick=logoutAccount;
+if($('#accountSaveNow')) $('#accountSaveNow').onclick=saveCloudNow;
+if($('#accountLoad')) $('#accountLoad').onclick=loadCloudNow;
 if($('#devopsBtn')) $('#devopsBtn').onclick=openDevops;
 if($('#devopsClose')) $('#devopsClose').onclick=closeDevops;
 if($('#githubConnect')) $('#githubConnect').onclick=connectGithub;
@@ -1303,3 +1457,4 @@ lines();
 run();
 status('☁️ CodeZero • Railway');
 initDevops();
+initAccount();
