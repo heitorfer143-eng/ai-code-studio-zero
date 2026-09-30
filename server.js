@@ -1,3 +1,4 @@
+const crypto=require('crypto');
 const http=require('http');
 const fs=require('fs');
 const path=require('path');
@@ -19,6 +20,171 @@ const CHAT_MODEL_CANDIDATES=(process.env.CHAT_MODEL_CANDIDATES||'gemini-3.1-flas
 const CODE_MODEL_CANDIDATES=(process.env.CODE_MODEL_CANDIDATES||'deepseek-v4-flash:0731,gemini-3.1-flash-lite,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
 let ACTIVE_CHAT_MODEL=FREE_GATEWAY_MODEL;
 let ACTIVE_CODE_MODEL=FREE_GATEWAY_MODEL;
+const DEVOPS_SESSIONS=new Map();
+const SESSION_TTL_MS=12*60*60*1000;
+const GITHUB_API='https://api.github.com';
+const RAILWAY_API='https://backboard.railway.com/graphql/v2';
+
+function randomToken(bytes=32){return crypto.randomBytes(bytes).toString('base64url');}
+function parseCookies(req){
+  const out={};
+  for(const part of String(req.headers.cookie||'').split(';')){
+    const i=part.indexOf('=');
+    if(i>0) out[part.slice(0,i).trim()]=decodeURIComponent(part.slice(i+1).trim());
+  }
+  return out;
+}
+function requestIsHttps(req){
+  return String(req.headers['x-forwarded-proto']||'').split(',')[0].trim()==='https';
+}
+function sessionCookie(sid,secure){
+  return 'czsid='+encodeURIComponent(sid)+'; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200'+(secure?'; Secure':'');
+}
+function pruneSessions(){
+  const now=Date.now();
+  for(const [id,sess] of DEVOPS_SESSIONS) if(now-(sess.lastSeen||0)>SESSION_TTL_MS) DEVOPS_SESSIONS.delete(id);
+}
+function getDevopsSession(req,res,create=true){
+  pruneSessions();
+  const sid=parseCookies(req).czsid;
+  let sess=sid?DEVOPS_SESSIONS.get(sid):null;
+  if(!sess&&create){
+    const id=randomToken(32);
+    sess={id,csrf:randomToken(24),createdAt:Date.now(),lastSeen:Date.now(),github:null,railway:null,rate:{at:0,count:0}};
+    DEVOPS_SESSIONS.set(id,sess);
+    res.setHeader('Set-Cookie',sessionCookie(id,requestIsHttps(req)));
+  }
+  if(sess) sess.lastSeen=Date.now();
+  return sess;
+}
+function safeEqual(a,b){
+  const aa=Buffer.from(String(a||'')),bb=Buffer.from(String(b||''));
+  return aa.length===bb.length&&aa.length>0&&crypto.timingSafeEqual(aa,bb);
+}
+function sameOrigin(req){
+  const origin=req.headers.origin;
+  if(!origin) return true;
+  try{
+    const u=new URL(origin);
+    const host=String(req.headers['x-forwarded-host']||req.headers.host||'').split(',')[0].trim();
+    return u.host===host;
+  }catch{return false;}
+}
+function requireDevopsWrite(req,res,sess){
+  if(!sameOrigin(req)){sendJson(res,403,{error:'Origem inválida'});return false;}
+  if(!sess||!safeEqual(req.headers['x-csrf-token'],sess.csrf)){sendJson(res,403,{error:'CSRF inválido'});return false;}
+  const now=Date.now();
+  if(now-sess.rate.at>60000){sess.rate={at:now,count:0};}
+  sess.rate.count++;
+  if(sess.rate.count>60){sendJson(res,429,{error:'Muitas operações. Tente novamente em um minuto.'});return false;}
+  return true;
+}
+function devopsPublicState(sess){
+  return {
+    csrf:sess.csrf,
+    github:sess.github?{connected:true,login:sess.github.login,name:sess.github.name||'',avatar:sess.github.avatar||''}:{connected:false},
+    railway:sess.railway?{connected:true,type:sess.railway.type,identity:sess.railway.identity||''}:{connected:false}
+  };
+}
+async function ghFetch(sess,pathName,options={}){
+  if(!sess?.github?.token) throw new Error('GitHub não conectado.');
+  const r=await fetch(GITHUB_API+pathName,{
+    ...options,
+    headers:{
+      'Accept':'application/vnd.github+json',
+      'Authorization':'Bearer '+sess.github.token,
+      'X-GitHub-Api-Version':'2026-03-10',
+      'User-Agent':'CodeZero/12',
+      ...(options.headers||{})
+    },
+    signal:AbortSignal.timeout(15000)
+  });
+  const raw=await r.text();
+  let data=null; try{data=JSON.parse(raw)}catch{}
+  if(!r.ok) throw new Error(data?.message||('GitHub HTTP '+r.status));
+  return data;
+}
+function isTextRepoPath(name){
+  return /\.(godot|gd|tscn|tres|gdshader|txt|md|markdown|json|jsonc|js|mjs|cjs|ts|tsx|jsx|html|css|scss|xml|yml|yaml|csv|log|ini|cfg|conf|env|py|java|c|cc|cpp|h|hpp|cs|go|rs|php|rb|sh|sql|toml)$/i.test(name)||/(^|\/)(Dockerfile|Procfile|README|LICENSE)$/i.test(name);
+}
+function isImageRepoPath(name){return /\.(png|jpg|jpeg|webp|gif)$/i.test(name);}
+async function githubImportRepo(sess,fullName,branch){
+  if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)) throw new Error('Repositório inválido.');
+  const repo=await ghFetch(sess,'/repos/'+fullName);
+  const br=String(branch||repo.default_branch||'main');
+  const branchData=await ghFetch(sess,'/repos/'+fullName+'/branches/'+encodeURIComponent(br));
+  const commit=await ghFetch(sess,'/repos/'+fullName+'/git/commits/'+branchData.commit.sha);
+  const tree=await ghFetch(sess,'/repos/'+fullName+'/git/trees/'+commit.tree.sha+'?recursive=1');
+  const files={},assets={};
+  let total=0,count=0;
+  for(const item of (tree.tree||[])){
+    if(item.type!=='blob'||item.size>350000||count>=140||total>3500000) continue;
+    if(!isTextRepoPath(item.path)&&!isImageRepoPath(item.path)) continue;
+    const blob=await ghFetch(sess,'/repos/'+fullName+'/git/blobs/'+item.sha);
+    const buf=Buffer.from(String(blob.content||'').replace(/\n/g,''),'base64');
+    if(isTextRepoPath(item.path)){
+      const text=buf.toString('utf8');
+      if(text.includes('\uFFFD')) continue;
+      files[item.path]=text;
+    }else if(isImageRepoPath(item.path)&&buf.length<1500000){
+      const ext=item.path.split('.').pop().toLowerCase();
+      const mimeType=ext==='jpg'||ext==='jpeg'?'image/jpeg':ext==='webp'?'image/webp':ext==='gif'?'image/gif':'image/png';
+      assets[item.path.replace(/^assets\//,'')]='data:'+mimeType+';base64,'+buf.toString('base64');
+    }
+    total+=buf.length; count++;
+  }
+  return {fullName,branch:br,defaultBranch:repo.default_branch,files,assets,commitSha:branchData.commit.sha};
+}
+async function githubCommitSnapshot(sess,{fullName,branch,message,files,assets}){
+  if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)) throw new Error('Repositório inválido.');
+  const br=String(branch||'main');
+  const ref=await ghFetch(sess,'/repos/'+fullName+'/git/ref/heads/'+encodeURIComponent(br));
+  const parentSha=ref.object.sha;
+  const parent=await ghFetch(sess,'/repos/'+fullName+'/git/commits/'+parentSha);
+  const items=[];
+  const entries={...(files||{})};
+  for(const [name,dataUrl] of Object.entries(assets||{})){
+    if(String(dataUrl).startsWith('data:')){
+      const m=String(dataUrl).match(/^data:([^;]+);base64,(.+)$/);
+      if(m) entries['assets/'+name]={base64:m[2]};
+    }
+  }
+  let n=0;
+  for(const [name,val] of Object.entries(entries)){
+    if(!/^[\w.\-\/]+$/.test(name)||++n>180) continue;
+    const isObj=val&&typeof val==='object'&&val.base64;
+    const blob=await ghFetch(sess,'/repos/'+fullName+'/git/blobs',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({content:isObj?val.base64:String(val),encoding:isObj?'base64':'utf-8'})
+    });
+    items.push({path:name,mode:'100644',type:'blob',sha:blob.sha});
+  }
+  const newTree=await ghFetch(sess,'/repos/'+fullName+'/git/trees',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({base_tree:parent.tree.sha,tree:items})
+  });
+  const newCommit=await ghFetch(sess,'/repos/'+fullName+'/git/commits',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({message:String(message||'CodeZero update').slice(0,200),tree:newTree.sha,parents:[parentSha]})
+  });
+  await ghFetch(sess,'/repos/'+fullName+'/git/refs/heads/'+encodeURIComponent(br),{
+    method:'PATCH',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sha:newCommit.sha,force:false})
+  });
+  return {sha:newCommit.sha,branch:br,repo:fullName};
+}
+async function railwayGraphql(sess,query,variables={}){
+  if(!sess?.railway?.token) throw new Error('Railway não conectado.');
+  const headers={'Content-Type':'application/json','User-Agent':'CodeZero/12'};
+  if(sess.railway.type==='project') headers['Project-Access-Token']=sess.railway.token;
+  else headers['Authorization']='Bearer '+sess.railway.token;
+  const r=await fetch(RAILWAY_API,{method:'POST',headers,body:JSON.stringify({query,variables}),signal:AbortSignal.timeout(15000)});
+  const data=await r.json();
+  if(!r.ok||data.errors?.length) throw new Error(data.errors?.[0]?.message||('Railway HTTP '+r.status));
+  return data.data;
+}
+
 
 const mime={
   '.html':'text/html; charset=utf-8',
