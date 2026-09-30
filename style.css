@@ -78,3 +78,17 @@ body.godot-mode #console{max-height:110px}
 @media(max-width:900px){
   body.godot-mode .workspace{grid-template-rows:48px 62vh 34vh}
 }
+
+#attachments{display:flex;gap:6px;flex-wrap:wrap;padding:0 10px;background:var(--panel);border-top:1px solid var(--line)}
+.attachmentChip{display:flex;align-items:center;gap:6px;max-width:220px;padding:6px 8px;margin-top:8px;border:1px solid var(--line);border-radius:999px;background:var(--panel2)}
+.attachmentName{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--muted)}
+.attachmentChip button{padding:0 5px;border:0;background:transparent;color:var(--muted)}
+.composer{grid-template-columns:auto 1fr auto}
+#attachBtn{min-width:42px;font-size:18px}
+.composer.dragover{outline:2px dashed var(--accent);outline-offset:-4px;background:#6095ff12}
+@media(max-width:900px){
+  #attachments{padding:0 8px}
+  .attachmentChip{max-width:160px}
+  .composer{grid-template-columns:auto 1fr auto}
+  #attachBtn{min-width:38px}
+}
