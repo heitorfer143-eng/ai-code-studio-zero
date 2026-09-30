@@ -406,8 +406,13 @@ async function freeGatewayChat(payload){
   const wantsGodot=godotIntent(message)||/ARQUIVO project\.godot:/m.test(String(payload.project||''));
   const wants3D=threeDIntent(message);
   const wantsWeb=webIntent(message);
-  const project=wantsCode?String(payload.project||'').slice(0,18000):'';
-  const history=Array.isArray(payload.history)?payload.history.slice(-10):[];
+  const project=wantsCode?String(payload.project||'').slice(0,32000):'';
+  const memory=String(payload.memory||'').slice(0,6000);
+  const history=Array.isArray(payload.history)?payload.history.slice(-12):[];
+  const complexity=taskComplexity(message,project);
+  const projectMap=buildProjectMap(project);
+  const projectMapText=JSON.stringify(projectMap,null,2).slice(0,8000);
+
   let sources=[];
   if(wantsWeb){
     try{sources=await researchWeb(message);}
@@ -418,68 +423,171 @@ async function freeGatewayChat(payload){
     : '';
 
   if(!wantsCode){
-    const systemPrompt='Você é o CodeZero, uma IA geral forte integrada a um editor. Converse naturalmente em português do Brasil. Responda diretamente ao que foi perguntado. Não transforme conversa casual em programação. Não altere arquivos nem use marcadores <<<FILE:...>>> sem pedido explícito. Quando houver pesquisa web, use as fontes, diferencie fatos de inferências e cite [1], [2] etc.';
+    const systemPrompt=[
+      'Você é o CodeZero V10, uma IA geral e técnica integrada a um editor.',
+      'Converse naturalmente em português do Brasil e responda diretamente.',
+      'Não transforme conversa casual em programação.',
+      'Quando houver pesquisa web, use as fontes e cite [1], [2] etc.',
+      'Quando o usuário perguntar sobre Godot, priorize Godot 4.x e GDScript atuais.',
+      'Se não souber algo, diga o que falta em vez de inventar.'
+    ].join(' ');
     const messages=[
       {role:'system',content:systemPrompt},
       ...history,
-      {role:'user',content:message+webContext}
+      {role:'user',content:message+(memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+webContext}
     ];
-    const response=await gatewayCompletion(messages,ACTIVE_CHAT_MODEL,2200,0.35);
-    return {response,provider:'brain-v8.3-agent',model:ACTIVE_CHAT_MODEL,mode:'chat',searched:wantsWeb,sources:sources.map(({title,url})=>({title,url}))};
+    const response=await gatewayCompletion(messages,ACTIVE_CHAT_MODEL,2600,0.3);
+    return {response,provider:'brain-v10',model:ACTIVE_CHAT_MODEL,mode:'chat',complexity,searched:wantsWeb,sources:sources.map(({title,url})=>({title,url}))};
   }
 
-  // Passo 1: planejar sem editar arquivos.
+  // Passo 1: especificação + plano.
   const planningMessages=[
-    {role:'system',content:'Você é o planejador técnico do CodeZero. Analise o pedido e o projeto. Produza um plano curto, identifique arquivos afetados, riscos, dependências e critérios de sucesso. Para projetos Godot use Godot 4.x e planeje árvore de cenas, nós, scripts GDScript, Input Map, recursos, colisões, câmera, física e multiplayer quando pedido. Para 3D em Godot use Node3D/CharacterBody3D/Camera3D/CollisionShape3D/MeshInstance3D e cenas .tscn. Não converta pedidos Godot para Three.js. Para projetos web 3D que NÃO sejam Godot, planeje renderer, câmera, luzes, materiais e controles. NÃO escreva blocos <<<FILE>>> ainda.'},
-    ...history.slice(-6),
-    {role:'user',content:message+'\n\nPROJETO:\n'+project+webContext}
+    {role:'system',content:[
+      'Você é o arquiteto sênior do CodeZero V10.',
+      'Converta o pedido em requisitos verificáveis, riscos, arquivos afetados e plano.',
+      'Liste critérios de aceitação concretos antes do plano.',
+      'Nunca escreva blocos <<<FILE>>> nesta etapa.',
+      'Para Godot use Godot 4.x, GDScript atual, caminhos res://, cenas .tscn, recursos .tres/.gdshader e Input Map coerente.',
+      'Em Godot 3D pense em árvore de cena, física, colisões, câmera, sinais, animação, navegação, performance e mobile quando relevante.',
+      'Não converta projeto Godot para Three.js.'
+    ].join(' ')},
+    ...history.slice(-8),
+    {role:'user',content:
+      'PEDIDO:\n'+message+
+      '\n\nCOMPLEXIDADE DETECTADA: '+complexity+
+      '\n\nMAPA DO PROJETO:\n'+projectMapText+
+      (memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+
+      '\n\nPROJETO ATUAL:\n'+project+
+      webContext
+    }
   ];
   let plan='';
   try{
-    plan=await gatewayCompletion(planningMessages,ACTIVE_CODE_MODEL,900,0.15);
+    plan=await gatewayCompletion(planningMessages,ACTIVE_CODE_MODEL,1500,0.12);
   }catch(err){
     console.log('[planner-error]',String(err?.message||err));
+    plan='Implemente o pedido exatamente, preservando o projeto atual e validando todas as referências.';
   }
 
-  // Passo 2: executar com o plano.
+  // Passo 2: execução.
   const knownFiles=projectFileNames(project);
   const executionMessages=[
-    {role:'system',content:'Você é o executor principal do CodeZero. Implemente EXATAMENTE o pedido. Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>. Preserve todo comportamento existente que não foi pedido para mudar. Não use pseudocódigo, TODOs ou placeholders. Para projetos Godot, entregue arquivos reais de Godot 4.x: project.godot, cenas .tscn, scripts .gd e recursos necessários. Use APIs atuais do Godot 4, caminhos res://, Input Map coerente e sinais/nós compatíveis. Para 3D Godot, use nós e física do engine, nunca Three.js. Para projetos web 3D que não sejam Godot, use WebGL/Three.js quando apropriado. Quando o pedido exigir uma imagem original, peça a ferramenta de imagem com exatamente <<<IMAGE:nome-do-arquivo.png|prompt detalhado em inglês>>>. Quando precisar modificar uma imagem existente, use exatamente <<<EDIT_IMAGE:imagem-origem.png|imagem-destino.png|instrução detalhada em inglês>>>. Se disser que criou ou editou uma imagem, você DEVE emitir o marcador correspondente. Depois use assets/nome-do-arquivo.png no HTML/CSS/JS como URL do asset. Separe código em arquivos quando isso melhorar manutenção. Não diga que fez algo sem entregar o arquivo correspondente. Arquivos conhecidos: '+knownFiles.join(', ')},
-    ...history.slice(-6),
-    {role:'user',content:message+'\n\nPLANO TÉCNICO:\n'+plan+'\n\nPROJETO ATUAL:\n'+project+webContext}
+    {role:'system',content:[
+      'Você é o executor principal do CodeZero V10.',
+      'Implemente EXATAMENTE os requisitos e critérios de aceitação do plano.',
+      'Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>.',
+      'Nunca use pseudocódigo, TODOs, placeholders ou trechos parciais.',
+      'Preserve comportamento existente que não foi pedido para mudar.',
+      'Não invente APIs, nós, sinais, métodos ou arquivos.',
+      'Para Godot, gere projeto real de Godot 4.x com GDScript, .tscn e recursos compatíveis; use res:// e Input Map corretamente.',
+      'Quando alterar uma cena, confira NodePath, nomes dos nós, scripts anexados e ext_resource.',
+      'Se o pedido for grande, prefira arquitetura modular em vários arquivos.',
+      'Só use <<<IMAGE:...>>> ou <<<EDIT_IMAGE:...>>> quando o usuário pedir explicitamente imagem.',
+      'Não diga que algo está pronto sem entregar os arquivos necessários.',
+      'Arquivos conhecidos: '+knownFiles.join(', ')
+    ].join(' ')},
+    ...history.slice(-8),
+    {role:'user',content:
+      'PEDIDO ORIGINAL:\n'+message+
+      '\n\nESPECIFICAÇÃO E PLANO:\n'+plan+
+      '\n\nMAPA DO PROJETO:\n'+projectMapText+
+      (memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+
+      '\n\nPROJETO ATUAL:\n'+project+
+      webContext
+    }
   ];
-  let draft=await gatewayCompletion(executionMessages,ACTIVE_CODE_MODEL,3800,0.12);
+  let draft=await gatewayCompletion(executionMessages,ACTIVE_CODE_MODEL,complexity==='high'?5200:4200,0.08);
 
-  // Passo 3: validação determinística + até 2 reparos.
+  // Passo 3: validação determinística + reparos.
   let files=parseFileBlocks(draft);
-  let validationErrors=validateGeneratedFiles(files);
-  for(let repair=0;repair<2 && validationErrors.length;repair++){
-    console.log('[agent-validation-failed]',validationErrors);
+  let validationErrors=[
+    ...validateGeneratedFiles(files),
+    ...validateProjectReferences(files,project)
+  ];
+  const maxRepairs=complexity==='high'?3:2;
+  for(let repair=0;repair<maxRepairs && validationErrors.length;repair++){
+    console.log('[v10-validation-failed]',validationErrors);
     const repairMessages=[
-      {role:'system',content:'Você é o reparador do CodeZero. Corrija TODOS os erros listados. Devolva a solução completa novamente usando <<<FILE:nome>>>...<<<END_FILE>>>. Não remova funcionalidades que já estavam corretas.'},
-      {role:'user',content:'PEDIDO ORIGINAL:\n'+message+'\n\nPROJETO ORIGINAL:\n'+project+'\n\nSOLUÇÃO ATUAL:\n'+draft+'\n\nERROS DETECTADOS:\n- '+validationErrors.join('\n- ')}
+      {role:'system',content:[
+        'Você é o reparador técnico do CodeZero V10.',
+        'Corrija TODOS os erros detectados sem remover funcionalidades corretas.',
+        'Devolva a solução COMPLETA novamente usando <<<FILE:nome>>>...<<<END_FILE>>>.',
+        'Em Godot, trate referências res://, NodePath, Input Map, scripts e cenas como dependências reais.'
+      ].join(' ')},
+      {role:'user',content:
+        'PEDIDO ORIGINAL:\n'+message+
+        '\n\nPLANO:\n'+plan+
+        '\n\nPROJETO ORIGINAL:\n'+project+
+        '\n\nSOLUÇÃO ATUAL:\n'+draft+
+        '\n\nERROS DETECTADOS:\n- '+validationErrors.join('\n- ')
+      }
     ];
-    draft=await gatewayCompletion(repairMessages,ACTIVE_CODE_MODEL,4000,0.08);
+    draft=await gatewayCompletion(repairMessages,ACTIVE_CODE_MODEL,4800,0.04);
     files=parseFileBlocks(draft);
-    validationErrors=validateGeneratedFiles(files);
+    validationErrors=[
+      ...validateGeneratedFiles(files),
+      ...validateProjectReferences(files,project)
+    ];
   }
 
-  // Passo 4: revisão semântica final.
+  // Passo 4: revisão semântica.
   const reviewMessages=[
-    {role:'system',content:'Você é o revisor sênior do CodeZero. Confira se a solução realmente cumpre o pedido, preserva o restante do projeto e é coerente entre HTML/CSS/JS. Em Godot, verifique sintaxe GDScript Godot 4, caminhos res://, nomes de nós, NodePath, Input Map, cenas .tscn, colisões, câmera e referências entre arquivos. Em 3D web que não seja Godot, verifique renderer/câmera/loop/controles. Se houver problema, devolva a SOLUÇÃO CORRIGIDA COMPLETA em blocos <<<FILE:nome>>>...<<<END_FILE>>>. Não responda apenas com explicações.'},
-    {role:'user',content:'PEDIDO:\n'+message+'\n\nPROJETO ORIGINAL:\n'+project+'\n\nSOLUÇÃO VALIDADA:\n'+draft}
+    {role:'system',content:[
+      'Você é o revisor sênior e adversarial do CodeZero V10.',
+      'Compare pedido, critérios de aceitação, projeto original e solução.',
+      'Procure funcionalidades faltando, regressões, referências quebradas e código que parece correto mas não funciona.',
+      'Para Godot, confira sintaxe Godot 4, hierarquia de nós, scripts, sinais, Input Map, res://, colisões, câmera, física e recursos.',
+      'Se houver problema, devolva a SOLUÇÃO CORRIGIDA COMPLETA com <<<FILE:nome>>>...<<<END_FILE>>>.',
+      'Se estiver correta, devolva exatamente os blocos de arquivo da solução, sem texto extra.'
+    ].join(' ')},
+    {role:'user',content:
+      'PEDIDO:\n'+message+
+      '\n\nCRITÉRIOS/PLANO:\n'+plan+
+      '\n\nPROJETO ORIGINAL:\n'+project+
+      '\n\nSOLUÇÃO CANDIDATA:\n'+draft
+    }
   ];
   try{
-    const reviewed=await gatewayCompletion(reviewMessages,ACTIVE_CODE_MODEL,4200,0.05);
+    const reviewed=await gatewayCompletion(reviewMessages,ACTIVE_CODE_MODEL,complexity==='high'?5200:4400,0.02);
     const reviewedFiles=parseFileBlocks(reviewed);
-    const reviewedErrors=validateGeneratedFiles(reviewedFiles);
+    const reviewedErrors=[
+      ...validateGeneratedFiles(reviewedFiles),
+      ...validateProjectReferences(reviewedFiles,project)
+    ];
     if(Object.keys(reviewedFiles).length && !reviewedErrors.length){
       draft=reviewed;
       files=reviewedFiles;
       validationErrors=[];
     }
   }catch(err){
-    console.log('[reviewer-error]',String(err?.message||err));
+    console.log('[v10-reviewer-error]',String(err?.message||err));
+  }
+
+  // Passo 5: juiz adicional somente em tarefas complexas.
+  if(complexity==='high' && !validationErrors.length){
+    try{
+      const judge=await gatewayCompletion([
+        {role:'system',content:'Você é o juiz final do CodeZero V10. Responda apenas PASS ou uma lista curta começando com FAIL: explicando requisitos não atendidos. Não escreva código.'},
+        {role:'user',content:'PEDIDO:\n'+message+'\n\nCRITÉRIOS/PLANO:\n'+plan+'\n\nSOLUÇÃO:\n'+draft}
+      ],ACTIVE_CODE_MODEL,500,0);
+      if(/^FAIL:/i.test(judge)){
+        const finalRepair=await gatewayCompletion([
+          {role:'system',content:'Você é o reparador final. Corrija integralmente os problemas apontados pelo juiz e devolva TODOS os arquivos alterados em <<<FILE:nome>>>...<<<END_FILE>>>.'},
+          {role:'user',content:'PEDIDO:\n'+message+'\n\nPROJETO:\n'+project+'\n\nSOLUÇÃO:\n'+draft+'\n\nJUIZ:\n'+judge}
+        ],ACTIVE_CODE_MODEL,5200,0.02);
+        const finalFiles=parseFileBlocks(finalRepair);
+        const finalErrors=[...validateGeneratedFiles(finalFiles),...validateProjectReferences(finalFiles,project)];
+        if(Object.keys(finalFiles).length&&!finalErrors.length){
+          draft=finalRepair;
+          files=finalFiles;
+          validationErrors=[];
+        }else{
+          validationErrors.push(...finalErrors);
+        }
+      }
+    }catch(err){
+      console.log('[v10-judge-error]',String(err?.message||err));
+    }
   }
 
   if(validationErrors.length){
@@ -488,13 +596,15 @@ async function freeGatewayChat(payload){
 
   return {
     response:draft,
-    provider:'brain-v8.3-agent',
+    provider:'brain-v10',
     model:ACTIVE_CODE_MODEL,
     mode:'code',
+    complexity,
     plan,
     validated:true,
     projectType:wantsGodot?'godot':(wants3D?'3d':'web'),
     changedFiles:Object.keys(files),
+    projectMap,
     searched:wantsWeb,
     sources:sources.map(({title,url})=>({title,url}))
   };
