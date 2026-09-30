@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <title>CodeZero AI Code Studio V10.1</title>
-  <link rel="stylesheet" href="style.css?v=10.1.0">
+  <title>CodeZero AI Code Studio V10.2</title>
+  <link rel="stylesheet" href="style.css?v=10.2.0">
 </head>
 <body>
   <header>
     <button id="chatToggle" class="ghost">☰ Chats</button>
-    <b>⚡ CodeZero <small>V10.1</small></b>
+    <b>⚡ CodeZero <small>V10.2</small></b>
     <span id="status">☁️ Railway</span>
     <button id="theme">☀/☾</button>
     <button id="uploadImage">📤 Asset</button><button id="new3D">🎮 Novo Godot</button><button id="exportGodot">📦 Baixar Godot ZIP</button><button id="resetProject">↻ Resetar</button><button id="run">▶ Ver projeto</button>
@@ -28,8 +28,11 @@
     <main>
       <section class="chat">
         <div id="messages"></div>
+        <div id="attachments"></div>
         <div class="composer">
-          <textarea id="prompt" placeholder="Peça um jogo Godot, scripts GDScript, cenas 3D, sistemas, multiplayer ou pesquisa..."></textarea>
+          <input id="attachmentInput" type="file" hidden multiple accept="image/*,.pdf,.txt,.md,.markdown,.json,.jsonc,.js,.mjs,.cjs,.ts,.tsx,.jsx,.html,.css,.scss,.xml,.yml,.yaml,.csv,.log,.ini,.cfg,.conf,.env,.gd,.tscn,.tres,.gdshader,.godot,.py,.java,.c,.cc,.cpp,.h,.hpp,.cs,.go,.rs,.php,.rb,.sh,.sql">
+          <button id="attachBtn" type="button" title="Anexar imagem, PDF ou arquivo">📎</button>
+          <textarea id="prompt" placeholder="Anexe uma imagem/PDF/arquivo e peça para explicar, analisar ou corrigir..."></textarea>
           <button id="send">Enviar</button>
         </div>
       </section>
@@ -49,6 +52,6 @@
   </div>
 
   <div id="drawerShade"></div>
-  <script type="module" src="app.js?v=10.1.0"></script>
+  <script type="module" src="app.js?v=10.2.0"></script>
 </body>
 </html>
