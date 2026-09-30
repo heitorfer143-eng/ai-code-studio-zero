@@ -471,7 +471,11 @@ async function send(){
     waiting.remove();
     renderMessages();
     renderChatList();
-    status(data?.searched?'🌐 CodeZero pesquisou e respondeu':'✅ CodeZero respondeu');
+    if(data?.validated){
+      status('✅ V10 validou '+(data.changedFiles?.length||changed.length)+' arquivo(s) • '+(data.complexity||'normal'));
+    }else{
+      status(data?.searched?'🌐 CodeZero pesquisou e respondeu':'✅ CodeZero respondeu');
+    }
   }catch(e){
     console.error(e);
     waiting.remove();
