@@ -16,6 +16,7 @@ let projectMemory=JSON.parse(localStorage.getItem(PROJECT_MEMORY_KEY)||'[]')||[]
 let active=Object.keys(files)[0];
 let busy=false;
 let lastChangedFiles=[];
+let pendingAttachments=[];
 let chats=loadChats();
 let activeChatId=localStorage.getItem(ACTIVE_CHAT_KEY)||chats[0].id;
 if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
@@ -346,6 +347,103 @@ $('#editor').oninput=()=>{
   lines();
 };
 
+function renderPendingAttachments(){
+  const root=$('#attachments');
+  if(!root) return;
+  root.textContent='';
+  for(const [i,a] of pendingAttachments.entries()){
+    const chip=document.createElement('div');
+    chip.className='attachmentChip';
+    const icon=document.createElement('span');
+    icon.textContent=a.kind==='image'?'🖼️':a.kind==='pdf'?'📄':'📎';
+    const name=document.createElement('span');
+    name.className='attachmentName';
+    name.textContent=a.name;
+    const remove=document.createElement('button');
+    remove.type='button';
+    remove.textContent='×';
+    remove.onclick=()=>{pendingAttachments.splice(i,1);renderPendingAttachments();};
+    chip.append(icon,name,remove);
+    root.append(chip);
+  }
+}
+
+async function extractPdfText(file){
+  const pdfjs=await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs');
+  pdfjs.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
+  const bytes=new Uint8Array(await file.arrayBuffer());
+  const doc=await pdfjs.getDocument({data:bytes}).promise;
+  const maxPages=Math.min(doc.numPages,25);
+  const out=[];
+  for(let p=1;p<=maxPages;p++){
+    const page=await doc.getPage(p);
+    const content=await page.getTextContent();
+    out.push('--- Página '+p+' ---\n'+content.items.map(x=>x.str).join(' '));
+  }
+  if(doc.numPages>maxPages) out.push('\n[PDF truncado: '+(doc.numPages-maxPages)+' página(s) não lida(s)]');
+  return out.join('\n\n').slice(0,50000);
+}
+
+async function extractImageText(file){
+  const mod=await import('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js');
+  const Tesseract=mod.default||mod;
+  const result=await Tesseract.recognize(file,'por+eng',{
+    logger:m=>{
+      if(m?.status==='recognizing text'&&typeof m.progress==='number'){
+        status('🔎 Lendo imagem… '+Math.round(m.progress*100)+'%');
+      }
+    }
+  });
+  return String(result?.data?.text||'').trim().slice(0,24000);
+}
+
+function isTextLikeFile(file){
+  const name=String(file.name||'').toLowerCase();
+  const type=String(file.type||'').toLowerCase();
+  return type.startsWith('text/')
+    || /(json|javascript|xml|yaml|csv|markdown)/.test(type)
+    || /\.(txt|md|markdown|json|jsonc|js|mjs|cjs|ts|tsx|jsx|html|css|scss|xml|yml|yaml|csv|log|ini|cfg|conf|env|gd|tscn|tres|gdshader|godot|py|java|c|cc|cpp|h|hpp|cs|go|rs|php|rb|sh|sql)$/i.test(name);
+}
+
+async function readAttachment(file){
+  if(!file) return null;
+  if(file.size>12*1024*1024) throw new Error(file.name+': máximo de 12 MB.');
+  const base={name:file.name||'arquivo',type:file.type||'',size:file.size||0};
+  if(String(file.type||'').startsWith('image/')){
+    const text=await extractImageText(file);
+    return {...base,kind:'image',text,note:text?'Texto extraído localmente por OCR.':'Não foi possível extrair texto legível desta imagem.'};
+  }
+  if(file.type==='application/pdf'||/\.pdf$/i.test(file.name||'')){
+    const text=await extractPdfText(file);
+    return {...base,kind:'pdf',text,note:'Texto extraído localmente do PDF.'};
+  }
+  if(isTextLikeFile(file)){
+    const text=(await file.text()).slice(0,60000);
+    return {...base,kind:'text',text,note:'Conteúdo lido diretamente do arquivo.'};
+  }
+  throw new Error(file.name+': formato ainda não suportado para leitura.');
+}
+
+async function addAttachmentFiles(fileList){
+  const list=[...(fileList||[])].slice(0,8-pendingAttachments.length);
+  for(const file of list){
+    try{
+      status('📎 Lendo '+file.name+'…');
+      const item=await readAttachment(file);
+      if(item) pendingAttachments.push(item);
+    }catch(e){
+      status('⚠️ '+e.message);
+    }
+  }
+  renderPendingAttachments();
+  status(pendingAttachments.length?'📎 '+pendingAttachments.length+' anexo(s) pronto(s)':'☁️ CodeZero • Railway');
+}
+
+function openAttachmentPicker(){
+  const input=$('#attachmentInput');
+  if(input) input.click();
+}
+
 function appendMessage(type,text='',sources=[]){
   const d=document.createElement('div');
   d.className=type;
@@ -476,7 +574,8 @@ async function send(){
   if(!p||busy) return;
   const chat=activeChat();
   const previousHistory=chat.messages.slice(-8).map(m=>({role:m.role,content:m.content}));
-  chat.messages.push({role:'user',content:p,display:p});
+  const sentAttachments=pendingAttachments.map(a=>({name:a.name,kind:a.kind}));
+  chat.messages.push({role:'user',content:p,display:p+(sentAttachments.length?'\n\n📎 '+sentAttachments.map(a=>a.name).join(', '):'')});
   if(chat.title==='Novo chat') chat.title=p.replace(/\s+/g,' ').slice(0,38)||'Novo chat';
   chat.updatedAt=Date.now();
   saveChats();
@@ -484,6 +583,9 @@ async function send(){
   renderMessages();
 
   $('#prompt').value='';
+  const attachmentsForRequest=pendingAttachments;
+  pendingAttachments=[];
+  renderPendingAttachments();
   busy=true;
   $('#send').disabled=true;
   const waiting=appendMessage('ai','Pensando…');
@@ -492,7 +594,7 @@ async function send(){
     const r=await fetch(API,{
       method:'POST',
       headers:{'content-type':'application/json'},
-      body:JSON.stringify({message:p,project:projectContext(),history:previousHistory,memory:projectMemoryText()})
+      body:JSON.stringify({message:p,project:projectContext(),history:previousHistory,memory:projectMemoryText(),attachments:attachmentsForRequest})
     });
     const raw=await r.text();
     let data=null;
@@ -733,6 +835,14 @@ window.onmessage=e=>{
 };
 
 $('#send').onclick=send;
+if($('#attachBtn')) $('#attachBtn').onclick=openAttachmentPicker;
+if($('#attachmentInput')) $('#attachmentInput').onchange=e=>{addAttachmentFiles(e.target.files);e.target.value='';};
+const composer=$('.composer');
+if(composer){
+  composer.addEventListener('dragover',e=>{e.preventDefault();composer.classList.add('dragover');});
+  composer.addEventListener('dragleave',()=>composer.classList.remove('dragover'));
+  composer.addEventListener('drop',e=>{e.preventDefault();composer.classList.remove('dragover');addAttachmentFiles(e.dataTransfer?.files);});
+}
 $('#prompt').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}};
 $('#run').onclick=run;
 $('#theme').onclick=()=>document.body.classList.toggle('light');
