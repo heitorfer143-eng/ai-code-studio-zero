@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <title>CodeZero AI Code Studio V12.0</title>
-  <link rel="stylesheet" href="style.css?v=12.0.0">
+  <title>CodeZero AI Code Studio V13.0</title>
+  <link rel="stylesheet" href="style.css?v=13.0.0">
 </head>
 <body>
   <header>
     <button id="chatToggle" class="ghost">☰ Chats</button>
-    <b>⚡ CodeZero <small>V12.0</small></b>
-    <span id="status">☁️ Railway</span><button id="devopsBtn">☁️ DevOps</button>
+    <b>⚡ CodeZero <small>V13.0</small></b>
+    <span id="status">☁️ Railway</span><span id="cloudSaveStatus">Local</span><button id="accountBtn">👤 Conta</button><button id="devopsBtn">☁️ DevOps</button>
     <button id="theme">☀/☾</button>
     <button id="importGodot">📥 Importar ZIP</button><input id="zipInput" type="file" hidden accept=".zip,application/zip"><button id="undoAI" title="Desfazer alteração da IA">↶</button><button id="redoAI" title="Refazer alteração da IA">↷</button><button id="uploadImage">📤 Asset</button><button id="new3D">🎮 Novo Godot</button><button id="exportGodot">📦 Baixar Godot ZIP</button><button id="resetProject">↻ Resetar</button><button id="run">▶ Ver projeto</button>
   </header>
@@ -59,7 +59,30 @@
     </main>
   </div>
 
-  <div id="devopsModal" class="modal hidden">
+  <div id="accountModal" class="modal hidden">
+      <div class="modalCard accountCard">
+        <div class="modalHead"><strong>👤 Conta CodeZero</strong><button id="accountClose">×</button></div>
+        <div class="accountBody">
+          <div id="accountLoggedOut">
+            <p>Crie uma conta para salvar projeto, chats, memória e checkpoints e continuar depois.</p>
+            <label>Usuário<input id="accountUsername" autocomplete="username" placeholder="seu_usuario"></label>
+            <label>Senha<input id="accountPassword" type="password" autocomplete="current-password" placeholder="mínimo 10 caracteres"></label>
+            <div class="modalActions accountActions"><button id="accountRegister">Criar conta</button><button id="accountLogin">Entrar</button></div>
+          </div>
+          <div id="accountLoggedIn" class="hidden">
+            <div class="accountProfile">Conectado como <strong id="accountName"></strong></div>
+            <div id="accountStorageInfo" class="accountStorageInfo"></div>
+            <div class="accountActions">
+              <button id="accountSaveNow">☁️ Salvar agora</button>
+              <button id="accountLoad">↧ Carregar salvo</button>
+              <button id="accountLogout">Sair</button>
+            </div>
+          </div>
+          <div id="accountResult" class="devopsResult"></div>
+        </div>
+      </div>
+    </div>
+    <div id="devopsModal" class="modal hidden">
       <div class="modalCard devopsCard">
         <div class="modalHead"><strong>☁️ CodeZero DevOps</strong><button id="devopsClose">×</button></div>
         <div class="devopsSecurity">🔒 Tokens ficam somente na sessão segura do backend. Não são salvos no navegador e somem quando o servidor reinicia ou você desconecta.</div>
@@ -112,6 +135,6 @@
       </div>
     </div>
     <div id="drawerShade"></div>
-  <script type="module" src="app.js?v=12.0.0"></script>
+  <script type="module" src="app.js?v=13.0.0"></script>
 </body>
 </html>
