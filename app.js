@@ -8,9 +8,11 @@ const API='/chat';
 const CHAT_KEY='zero.chats.v1';
 const ACTIVE_CHAT_KEY='zero.activeChat.v1';
 const ASSET_KEY='zero.assets.v1';
+const PROJECT_MEMORY_KEY='zero.project.memory.v1';
 
 let files=JSON.parse(localStorage.getItem('zero.files')||'null')||DEFAULT;
 let assets=JSON.parse(localStorage.getItem(ASSET_KEY)||'{}')||{};
+let projectMemory=JSON.parse(localStorage.getItem(PROJECT_MEMORY_KEY)||'[]')||[];
 let active=Object.keys(files)[0];
 let busy=false;
 let chats=loadChats();
@@ -109,6 +111,29 @@ function closeChatDrawer(){
 
 function save(){localStorage.setItem('zero.files',JSON.stringify(files))}
 function saveAssets(){localStorage.setItem(ASSET_KEY,JSON.stringify(assets))}
+function saveProjectMemory(){
+  localStorage.setItem(PROJECT_MEMORY_KEY,JSON.stringify(projectMemory.slice(-30)));
+}
+function rememberProjectChange(request,changedFiles,meta={}){
+  if(!Array.isArray(changedFiles)||!changedFiles.length) return;
+  projectMemory.push({
+    request:String(request||'').slice(0,500),
+    files:changedFiles.slice(0,20),
+    projectType:meta.projectType||'',
+    complexity:meta.complexity||'',
+    at:Date.now()
+  });
+  projectMemory=projectMemory.slice(-30);
+  saveProjectMemory();
+}
+function projectMemoryText(){
+  if(!projectMemory.length) return '';
+  return projectMemory.slice(-12).map((m,i)=>{
+    const when=new Date(m.at||Date.now()).toLocaleString();
+    return `#${i+1} [${when}] ${m.request}\nArquivos: ${(m.files||[]).join(', ')}${m.projectType?'\nTipo: '+m.projectType:''}`;
+  }).join('\n\n');
+}
+
 function resetProject(){
   if(!confirm('Resetar o projeto atual? Os chats serão mantidos.')) return;
   if(isGodotProject()){
@@ -118,6 +143,8 @@ function resetProject(){
   }
   files=JSON.parse(JSON.stringify(DEFAULT));
   assets={};
+  projectMemory=[];
+  saveProjectMemory();
   active=Object.keys(files)[0];
   save();
   saveAssets();
@@ -422,7 +449,7 @@ async function send(){
     const r=await fetch(API,{
       method:'POST',
       headers:{'content-type':'application/json'},
-      body:JSON.stringify({message:p,project:projectContext(),history:previousHistory})
+      body:JSON.stringify({message:p,project:projectContext(),history:previousHistory,memory:projectMemoryText()})
     });
     const raw=await r.text();
     let data=null;
@@ -436,6 +463,7 @@ async function send(){
     const generatedImages=await processImageRequests(full);
     const editedImages=await processEditImageRequests(full);
     const changed=applyFiles(full);
+    if(changed.length) rememberProjectChange(p,changed,{projectType:data?.projectType,complexity:data?.complexity});
     const clean=(visibleReply(full)||'Projeto atualizado.')+(changed.length?'\n\n✓ '+changed.join(', '):'')+(generatedImages.length?'\n🖼️ Geradas: '+generatedImages.map(x=>'assets/'+x.name).join(', '):'')+(editedImages.length?'\n🛠️ Editadas: '+editedImages.map(x=>'assets/'+x.name).join(', '):'');
     chat.messages.push({role:'assistant',content:full,display:clean,sources:data?.sources||[]});
     chat.updatedAt=Date.now();
@@ -564,6 +592,8 @@ func _physics_process(delta: float) -> void:
 `
   };
   assets={};
+  projectMemory=[];
+  saveProjectMemory();
   active='player.gd';
   save();
   saveAssets();
