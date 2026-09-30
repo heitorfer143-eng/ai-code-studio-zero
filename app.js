@@ -21,9 +21,217 @@ let pendingAttachments=[];
 let checkpoints=JSON.parse(localStorage.getItem(CHECKPOINT_KEY)||'[]')||[];
 let checkpointIndex=checkpoints.length-1;
 let taskProgressTimer=null;
+let devopsCsrf='';
+let devopsState={github:{connected:false},railway:{connected:false}};
 let chats=loadChats();
 let activeChatId=localStorage.getItem(ACTIVE_CHAT_KEY)||chats[0].id;
 if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
+
+async function devopsFetch(url,options={}){
+  const opts={credentials:'same-origin',...options,headers:{...(options.headers||{})}};
+  if((opts.method||'GET').toUpperCase()!=='GET'){
+    opts.headers['Content-Type']=opts.headers['Content-Type']||'application/json';
+    opts.headers['X-CSRF-Token']=devopsCsrf;
+  }
+  const r=await fetch(url,opts);
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(data?.details||data?.error||('HTTP '+r.status));
+  return data;
+}
+function renderDevopsState(){
+  const gs=$('#githubState'),rs=$('#railwayState');
+  if(gs) gs.textContent=devopsState.github?.connected?'🟢 '+(devopsState.github.login||'GitHub conectado'):'⚪ Desconectado';
+  if(rs) rs.textContent=devopsState.railway?.connected?'🟢 '+(devopsState.railway.identity||'Railway conectado'):'⚪ Desconectado';
+}
+async function initDevops(){
+  try{
+    const data=await devopsFetch('/devops/session');
+    devopsCsrf=data.csrf||'';
+    devopsState={github:data.github||{connected:false},railway:data.railway||{connected:false}};
+    renderDevopsState();
+  }catch(e){console.warn('devops session',e);}
+}
+function showDevopsResult(target,text,error=false){
+  const el=$(target);
+  if(!el) return;
+  el.textContent=String(text||'');
+  el.classList.toggle('error',!!error);
+}
+function openDevops(){
+  $('#devopsModal')?.classList.remove('hidden');
+  renderDevopsState();
+  if(devopsState.github?.connected) loadGithubRepos();
+  if(devopsState.railway?.connected) loadRailwayProjects();
+}
+function closeDevops(){$('#devopsModal')?.classList.add('hidden');}
+
+async function connectGithub(){
+  const token=prompt('Cole um token GitHub Fine-grained com acesso apenas aos repositórios necessários.\nPermissão recomendada: Contents = Read and write.\nO token NÃO será salvo no navegador.');
+  if(!token) return;
+  try{
+    const data=await devopsFetch('/devops/github/connect',{method:'POST',body:JSON.stringify({token})});
+    devopsState.github=data.github; renderDevopsState(); showDevopsResult('#githubResult','Conectado com segurança.');
+    await loadGithubRepos();
+  }catch(e){showDevopsResult('#githubResult',e.message,true);}
+}
+async function disconnectGithub(){
+  try{
+    await devopsFetch('/devops/github/disconnect',{method:'POST',body:'{}'});
+    devopsState.github={connected:false}; renderDevopsState();
+    $('#githubRepo').innerHTML='<option value="">Selecione...</option>';
+    $('#githubBranch').innerHTML='<option value="main">main</option>';
+    showDevopsResult('#githubResult','GitHub desconectado e token apagado da sessão.');
+  }catch(e){showDevopsResult('#githubResult',e.message,true);}
+}
+async function loadGithubRepos(){
+  try{
+    const data=await devopsFetch('/devops/github/repos');
+    const sel=$('#githubRepo');
+    const previous=sel.value;
+    sel.innerHTML='<option value="">Selecione...</option>';
+    for(const r of data.repos||[]){
+      const o=document.createElement('option'); o.value=r.fullName; o.textContent=(r.private?'🔒 ':'')+r.fullName; o.dataset.branch=r.defaultBranch||'main'; sel.append(o);
+    }
+    if(previous&&[...sel.options].some(o=>o.value===previous)) sel.value=previous;
+    showDevopsResult('#githubResult',(data.repos||[]).length+' repositório(s).');
+    if(sel.value) await loadGithubBranches();
+  }catch(e){showDevopsResult('#githubResult',e.message,true);}
+}
+async function loadGithubBranches(){
+  const repo=$('#githubRepo')?.value;
+  if(!repo) return;
+  try{
+    const data=await devopsFetch('/devops/github/branches?repo='+encodeURIComponent(repo));
+    const sel=$('#githubBranch'); sel.innerHTML='';
+    for(const b of data.branches||[]){const o=document.createElement('option');o.value=b.name;o.textContent=b.name;sel.append(o);}
+    if(!sel.options.length){const o=document.createElement('option');o.value='main';o.textContent='main';sel.append(o);}
+  }catch(e){showDevopsResult('#githubResult',e.message,true);}
+}
+async function importGithubRepo(){
+  const fullName=$('#githubRepo')?.value,branch=$('#githubBranch')?.value||'main';
+  if(!fullName) return;
+  if(!confirm('Substituir o projeto atual pelo conteúdo de '+fullName+' ('+branch+')? Um checkpoint será criado.')) return;
+  try{
+    showDevopsResult('#githubResult','Importando...');
+    const data=await devopsFetch('/devops/github/import',{method:'POST',body:JSON.stringify({fullName,branch})});
+    createCheckpoint('Antes de importar '+fullName);
+    files=data.files||{}; assets=data.assets||{}; active=Object.keys(files)[0]||'';
+    projectMemory=[]; saveProjectMemory(); save(); saveAssets(); $('#editor').value=files[active]||'';
+    tabs(); renderFileTree(); renderAssets(); lines(); run(); createCheckpoint('Importado '+fullName);
+    showDevopsResult('#githubResult','Importado '+Object.keys(files).length+' arquivo(s). Commit '+String(data.commitSha||'').slice(0,7));
+  }catch(e){showDevopsResult('#githubResult',e.message,true);}
+}
+async function commitGithub(){
+  const fullName=$('#githubRepo')?.value,branch=$('#githubBranch')?.value||'main';
+  if(!fullName) return;
+  const message=prompt('Mensagem do commit:','CodeZero: atualizar projeto');
+  if(!message) return;
+  if(!confirm('Enviar o snapshot atual para '+fullName+' / '+branch+'?')) return;
+  try{
+    showDevopsResult('#githubResult','Criando commit...');
+    const data=await devopsFetch('/devops/github/commit',{method:'POST',body:JSON.stringify({fullName,branch,message,files,assets})});
+    showDevopsResult('#githubResult','✅ Push concluído: '+String(data.sha||'').slice(0,10));
+  }catch(e){showDevopsResult('#githubResult',e.message,true);}
+}
+async function createGithubBranch(){
+  const fullName=$('#githubRepo')?.value,from=$('#githubBranch')?.value||'main';
+  if(!fullName) return;
+  const name=prompt('Nome da nova branch:','codezero/'+Date.now().toString(36));
+  if(!name) return;
+  try{
+    await devopsFetch('/devops/github/branch',{method:'POST',body:JSON.stringify({fullName,name,from})});
+    await loadGithubBranches(); $('#githubBranch').value=name;
+    showDevopsResult('#githubResult','🌿 Branch criada: '+name);
+  }catch(e){showDevopsResult('#githubResult',e.message,true);}
+}
+
+async function connectRailway(){
+  const type=(prompt('Tipo de token Railway:\n1 = Account/OAuth token\n2 = Project token','1')==='2')?'project':'account';
+  const token=prompt('Cole o token Railway. Ele ficará somente na sessão segura do backend e NÃO será salvo no navegador.');
+  if(!token) return;
+  try{
+    const data=await devopsFetch('/devops/railway/connect',{method:'POST',body:JSON.stringify({token,type})});
+    devopsState.railway=data.railway; renderDevopsState(); showDevopsResult('#railwayResult','Railway conectado.');
+    await loadRailwayProjects();
+  }catch(e){showDevopsResult('#railwayResult',e.message,true);}
+}
+async function disconnectRailway(){
+  try{
+    await devopsFetch('/devops/railway/disconnect',{method:'POST',body:'{}'});
+    devopsState.railway={connected:false}; renderDevopsState();
+    for(const id of ['#railwayProject','#railwayService','#railwayEnvironment']) $(id).innerHTML='<option value="">Selecione...</option>';
+    showDevopsResult('#railwayResult','Railway desconectado e token apagado da sessão.');
+  }catch(e){showDevopsResult('#railwayResult',e.message,true);}
+}
+async function loadRailwayProjects(){
+  try{
+    const data=await devopsFetch('/devops/railway/projects');
+    const sel=$('#railwayProject'),old=sel.value; sel.innerHTML='<option value="">Selecione...</option>';
+    for(const p of data.projects||[]){const o=document.createElement('option');o.value=p.id;o.textContent=p.name||p.id;sel.append(o);}
+    if(old&&[...sel.options].some(o=>o.value===old)) sel.value=old;
+    showDevopsResult('#railwayResult',(data.projects||[]).length+' projeto(s).');
+    if(sel.value) await loadRailwayProject();
+  }catch(e){showDevopsResult('#railwayResult',e.message,true);}
+}
+async function loadRailwayProject(){
+  const id=$('#railwayProject')?.value;if(!id)return;
+  try{
+    const data=await devopsFetch('/devops/railway/project?id='+encodeURIComponent(id));
+    const service=$('#railwayService'),env=$('#railwayEnvironment'); service.innerHTML=''; env.innerHTML='';
+    for(const x of data.project.services||[]){const o=document.createElement('option');o.value=x.id;o.textContent=x.name||x.id;service.append(o);}
+    for(const x of data.project.environments||[]){const o=document.createElement('option');o.value=x.id;o.textContent=x.name||x.id;env.append(o);}
+  }catch(e){showDevopsResult('#railwayResult',e.message,true);}
+}
+async function deployRailway(){
+  const serviceId=$('#railwayService')?.value,environmentId=$('#railwayEnvironment')?.value;
+  if(!serviceId||!environmentId) return;
+  if(!confirm('Iniciar deploy deste serviço no Railway?')) return;
+  try{
+    const data=await devopsFetch('/devops/railway/deploy',{method:'POST',body:JSON.stringify({serviceId,environmentId})});
+    showDevopsResult('#railwayResult','🚀 Deploy iniciado: '+(data.deploymentId||''));
+    await listRailwayDeployments();
+  }catch(e){showDevopsResult('#railwayResult',e.message,true);}
+}
+async function listRailwayDeployments(){
+  const projectId=$('#railwayProject')?.value,serviceId=$('#railwayService')?.value;
+  if(!projectId||!serviceId) return;
+  try{
+    const data=await devopsFetch('/devops/railway/deployments?projectId='+encodeURIComponent(projectId)+'&serviceId='+encodeURIComponent(serviceId));
+    const root=$('#railwayResult'); root.textContent='';
+    for(const d of data.deployments||[]){
+      const b=document.createElement('button'); b.className='deploymentRow'; b.textContent=(d.status||'?')+' • '+new Date(d.createdAt).toLocaleString();
+      b.onclick=()=>loadRailwayLogs(d.id); root.append(b);
+    }
+  }catch(e){showDevopsResult('#railwayResult',e.message,true);}
+}
+async function loadRailwayLogs(deploymentId){
+  try{
+    const data=await devopsFetch('/devops/railway/logs?deploymentId='+encodeURIComponent(deploymentId));
+    const text=(data.logs||[]).map(x=>'['+(x.severity||'info')+'] '+x.message).join('\n');
+    showDevopsResult('#railwayResult',text||'Sem logs.');
+  }catch(e){showDevopsResult('#railwayResult',e.message,true);}
+}
+async function linkRailwayRepo(){
+  const serviceId=$('#railwayService')?.value,repo=$('#githubRepo')?.value,branch=$('#githubBranch')?.value||'main';
+  if(!serviceId||!repo){showDevopsResult('#railwayResult','Selecione serviço Railway e repositório GitHub.',true);return;}
+  if(!confirm('Conectar o serviço Railway a '+repo+' / '+branch+'?')) return;
+  try{
+    await devopsFetch('/devops/railway/connect-repo',{method:'POST',body:JSON.stringify({serviceId,repo,branch})});
+    showDevopsResult('#railwayResult','🔗 Serviço conectado ao repositório.');
+  }catch(e){showDevopsResult('#railwayResult',e.message,true);}
+}
+async function setRailwayVariables(){
+  const projectId=$('#railwayProject')?.value,serviceId=$('#railwayService')?.value,environmentId=$('#railwayEnvironment')?.value;
+  if(!projectId||!environmentId) return;
+  const raw=prompt('Digite variáveis no formato KEY=VALUE, uma por linha.\nOs valores serão enviados direto ao backend e não serão exibidos depois.');
+  if(!raw) return;
+  const variables={};
+  for(const line of raw.split(/\r?\n/)){const i=line.indexOf('=');if(i>0)variables[line.slice(0,i).trim()]=line.slice(i+1);}
+  try{
+    const data=await devopsFetch('/devops/railway/variables',{method:'POST',body:JSON.stringify({projectId,environmentId,serviceId,variables})});
+    showDevopsResult('#railwayResult','🔐 Atualizadas: '+(data.updated||[]).join(', '));
+  }catch(e){showDevopsResult('#railwayResult',e.message,true);}
+}
 
 function uid(){return 'c_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)}
 function freshChat(){
@@ -1040,6 +1248,23 @@ window.onmessage=e=>{
 };
 
 $('#send').onclick=send;
+if($('#devopsBtn')) $('#devopsBtn').onclick=openDevops;
+if($('#devopsClose')) $('#devopsClose').onclick=closeDevops;
+if($('#githubConnect')) $('#githubConnect').onclick=connectGithub;
+if($('#githubDisconnect')) $('#githubDisconnect').onclick=disconnectGithub;
+if($('#githubRefresh')) $('#githubRefresh').onclick=loadGithubRepos;
+if($('#githubRepo')) $('#githubRepo').onchange=loadGithubBranches;
+if($('#githubImport')) $('#githubImport').onclick=importGithubRepo;
+if($('#githubNewBranch')) $('#githubNewBranch').onclick=createGithubBranch;
+if($('#githubCommit')) $('#githubCommit').onclick=commitGithub;
+if($('#railwayConnect')) $('#railwayConnect').onclick=connectRailway;
+if($('#railwayDisconnect')) $('#railwayDisconnect').onclick=disconnectRailway;
+if($('#railwayRefresh')) $('#railwayRefresh').onclick=loadRailwayProjects;
+if($('#railwayProject')) $('#railwayProject').onchange=loadRailwayProject;
+if($('#railwayDeploy')) $('#railwayDeploy').onclick=deployRailway;
+if($('#railwayDeployments')) $('#railwayDeployments').onclick=listRailwayDeployments;
+if($('#railwayLinkRepo')) $('#railwayLinkRepo').onclick=linkRailwayRepo;
+if($('#railwayVars')) $('#railwayVars').onclick=setRailwayVariables;
 if($('#undoAI')) $('#undoAI').onclick=undoAI;
 if($('#redoAI')) $('#redoAI').onclick=redoAI;
 if($('#newFile')) $('#newFile').onclick=createFileManual;
@@ -1077,3 +1302,4 @@ renderFileTree();
 lines();
 run();
 status('☁️ CodeZero • Railway');
+initDevops();
