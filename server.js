@@ -17,6 +17,8 @@ const IMAGE_BASE_URL=(process.env.IMAGE_BASE_URL||'https://gen.pollinations.ai')
 const IMAGE_MODEL=process.env.IMAGE_MODEL||'flux';
 const IMAGE_EDIT_MODEL=process.env.IMAGE_EDIT_MODEL||'kontext';
 const POLLINATIONS_KEY=process.env.POLLINATIONS_KEY||'';
+const POLLINATIONS_APP_KEY=process.env.POLLINATIONS_APP_KEY||'';
+const POLLINATIONS_ENTER='https://enter.pollinations.ai';
 const CHAT_MODEL_CANDIDATES=(process.env.CHAT_MODEL_CANDIDATES||'gemini-3.1-flash-lite,deepseek-v4-flash:0731,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
 const CODE_MODEL_CANDIDATES=(process.env.CODE_MODEL_CANDIDATES||'deepseek-v4-flash:0731,gemini-3.1-flash-lite,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
 let ACTIVE_CHAT_MODEL=FREE_GATEWAY_MODEL;
@@ -165,7 +167,7 @@ function getDevopsSession(req,res,create=true){
   let sess=sid?DEVOPS_SESSIONS.get(sid):null;
   if(!sess&&create){
     const id=randomToken(32);
-    sess={id,csrf:randomToken(24),createdAt:Date.now(),lastSeen:Date.now(),github:null,railway:null,rate:{at:0,count:0}};
+    sess={id,csrf:randomToken(24),createdAt:Date.now(),lastSeen:Date.now(),github:null,railway:null,pollen:null,pollenDevice:null,rate:{at:0,count:0}};
     DEVOPS_SESSIONS.set(id,sess);
     res.setHeader('Set-Cookie',sessionCookie(id,requestIsHttps(req)));
   }
@@ -300,6 +302,72 @@ async function railwayGraphql(sess,query,variables={}){
   return data.data;
 }
 
+
+function pollenSessionKey(req,res){
+  const sess=getDevopsSession(req,res,true);
+  return {sess,key:sess?.pollen?.accessToken||POLLINATIONS_KEY||''};
+}
+async function pollenFetch(pathName,options={},key=''){
+  const headers={...(options.headers||{})};
+  if(key) headers['Authorization']='Bearer '+key;
+  const r=await fetch(IMAGE_BASE_URL+pathName,{...options,headers,signal:AbortSignal.timeout(90000)});
+  return r;
+}
+async function fetchPollenModels(){
+  const r=await pollenFetch('/v1/models');
+  if(!r.ok) throw new Error('Falha ao carregar catálogo Pollinations');
+  const data=await r.json();
+  const arr=Array.isArray(data)?data:(Array.isArray(data?.data)?data.data:[]);
+  return arr.filter(m=>m&&m.category==='image').map(m=>({
+    id:m.id,
+    title:m.title||m.id,
+    publisher:m.publisher||m.owned_by||'',
+    aliases:Array.isArray(m.aliases)?m.aliases:[],
+    inputModalities:Array.isArray(m.input_modalities)?m.input_modalities:[],
+    outputModalities:Array.isArray(m.output_modalities)?m.output_modalities:[],
+    supportedEndpoints:Array.isArray(m.supported_endpoints)?m.supported_endpoints:[],
+    pricing:m.pricing||{},
+    health:m.health||null,
+    description:String(m.description||'').slice(0,240)
+  }));
+}
+async function pollinationsGenerateImage(key,{prompt,model,size='1024x1024'}){
+  if(!key) throw new Error('Conecte sua conta Pollinations ou configure POLLINATIONS_KEY.');
+  const r=await pollenFetch('/v1/images/generations',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model,prompt,size,response_format:'url',n:1})
+  },key);
+  const raw=await r.text();
+  let data=null; try{data=JSON.parse(raw)}catch{}
+  if(!r.ok) throw new Error(data?.error?.message||data?.error||raw||('Pollinations HTTP '+r.status));
+  const item=data?.data?.[0];
+  if(item?.url) return {url:item.url};
+  if(item?.b64_json) return {dataUrl:'data:image/png;base64,'+item.b64_json};
+  throw new Error('Pollinations não retornou imagem.');
+}
+async function pollinationsEditImage(key,{dataUrl,sourceUrl,prompt,filename='image.png',model,size='1024x1024'}){
+  if(!key) throw new Error('Conecte sua conta Pollinations ou configure POLLINATIONS_KEY.');
+  const form=new FormData();
+  if(dataUrl){
+    const parsed=parseDataImage(dataUrl);
+    form.append('image',new Blob([parsed.buffer],{type:parsed.mime}),filename);
+  }else if(sourceUrl){
+    form.append('image',sourceUrl);
+  }else throw new Error('Imagem de origem ausente.');
+  form.append('prompt',prompt);
+  form.append('model',model);
+  form.append('size',size);
+  form.append('response_format','url');
+  const r=await pollenFetch('/v1/images/edits',{method:'POST',body:form},key);
+  const raw=await r.text();
+  let data=null; try{data=JSON.parse(raw)}catch{}
+  if(!r.ok) throw new Error(data?.error?.message||data?.error||raw||('Pollinations HTTP '+r.status));
+  const item=data?.data?.[0];
+  if(item?.url) return {url:item.url};
+  if(item?.b64_json) return {dataUrl:'data:image/png;base64,'+item.b64_json};
+  throw new Error('Pollinations não retornou imagem editada.');
+}
 
 const mime={
   '.html':'text/html; charset=utf-8',
@@ -1294,40 +1362,111 @@ const server=http.createServer(async(req,res)=>{
     }catch(e){return sendJson(res,400,{error:'Falha ao atualizar variáveis',details:String(e?.message||e)});}
   }
 
+  if(pathnameSearch==='/pollen/status'&&req.method==='GET'){
+    const {sess}=pollenSessionKey(req,res);
+    return sendJson(res,200,{ok:true,connected:Boolean(sess?.pollen?.accessToken),serverKey:Boolean(POLLINATIONS_KEY),appKeyConfigured:Boolean(POLLINATIONS_APP_KEY),user:sess?.pollen?.user||null});
+  }
+  if(pathnameSearch==='/pollen/models'&&req.method==='GET'){
+    try{
+      const models=await fetchPollenModels();
+      return sendJson(res,200,{ok:true,models});
+    }catch(e){return sendJson(res,502,{error:'Falha ao carregar modelos Pollinations',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/pollen/connect-key'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,true);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,200000);
+      const key=String(body.key||'').trim();
+      if(!/^sk_[A-Za-z0-9_-]{20,}$/.test(key)) return sendJson(res,400,{error:'Chave Pollinations inválida'});
+      const r=await fetch(POLLINATIONS_ENTER+'/api/oauth/userinfo',{headers:{Authorization:'Bearer '+key},signal:AbortSignal.timeout(12000)});
+      const user=r.ok?await r.json().catch(()=>null):null;
+      sess.pollen={accessToken:key,user:user?{name:user.preferred_username||user.name||'',picture:user.picture||''}:null,connectedAt:Date.now(),mode:'manual'};
+      return sendJson(res,200,{ok:true,user:sess.pollen.user});
+    }catch(e){return sendJson(res,400,{error:'Falha ao conectar Pollinations',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/pollen/device/start'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,true);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    if(!POLLINATIONS_APP_KEY) return sendJson(res,409,{error:'POLLINATIONS_APP_KEY ainda não está configurada no servidor.'});
+    try{
+      const r=await fetch(POLLINATIONS_ENTER+'/api/device/code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:POLLINATIONS_APP_KEY}),signal:AbortSignal.timeout(12000)});
+      const data=await r.json();
+      if(!r.ok) throw new Error(data?.error_description||data?.error||'Falha no device flow');
+      sess.pollenDevice={deviceCode:data.device_code,startedAt:Date.now(),interval:Math.max(5,Number(data.interval||5))};
+      return sendJson(res,200,{ok:true,userCode:data.user_code,verificationUri:data.verification_uri?.startsWith('http')?data.verification_uri:(POLLINATIONS_ENTER+(data.verification_uri||'/device')),interval:sess.pollenDevice.interval});
+    }catch(e){return sendJson(res,502,{error:'Falha ao iniciar conexão Pollinations',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/pollen/device/poll'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,false);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    if(!sess?.pollenDevice?.deviceCode) return sendJson(res,400,{error:'Nenhuma conexão Pollinations pendente'});
+    try{
+      const r=await fetch(POLLINATIONS_ENTER+'/api/device/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_code:sess.pollenDevice.deviceCode}),signal:AbortSignal.timeout(12000)});
+      const data=await r.json();
+      if(!r.ok||data.error){
+        if(data.error==='authorization_pending') return sendJson(res,202,{ok:true,pending:true});
+        throw new Error(data.error_description||data.error||'Falha na autorização');
+      }
+      const token=String(data.access_token||'');
+      if(!token) throw new Error('Token ausente');
+      let user=null;
+      try{
+        const u=await fetch(POLLINATIONS_ENTER+'/api/oauth/userinfo',{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(12000)});
+        if(u.ok) user=await u.json();
+      }catch{}
+      sess.pollen={accessToken:token,user:user?{name:user.preferred_username||user.name||'',picture:user.picture||''}:null,connectedAt:Date.now(),mode:'byop'};
+      sess.pollenDevice=null;
+      return sendJson(res,200,{ok:true,pending:false,user:sess.pollen.user});
+    }catch(e){return sendJson(res,400,{error:'Falha ao concluir conexão Pollinations',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/pollen/disconnect'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,false);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    if(sess){sess.pollen=null;sess.pollenDevice=null;}
+    return sendJson(res,200,{ok:true});
+  }
+  if(pathnameSearch==='/pollen/generate'&&req.method==='POST'){
+    const {sess,key}=pollenSessionKey(req,res);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,300000);
+      const prompt=String(body.prompt||'').trim().slice(0,1800);
+      const model=String(body.model||IMAGE_MODEL).trim().slice(0,180);
+      const size=String(body.size||'1024x1024').trim().slice(0,40);
+      if(!prompt) return sendJson(res,400,{error:'Prompt vazio'});
+      const out=await pollinationsGenerateImage(key,{prompt,model,size});
+      return sendJson(res,200,{ok:true,...out,model});
+    }catch(e){return sendJson(res,400,{error:'Falha ao gerar imagem',details:String(e?.message||e)});}
+  }
+
   if(pathnameSearch==='/image/edit'&&req.method==='POST'){
+    const {sess,key}=pollenSessionKey(req,res);
+    if(!requireDevopsWrite(req,res,sess)) return;
     try{
       const body=await readJson(req,12*1024*1024);
-      const prompt=String(body.prompt||'').trim().slice(0,1600);
+      const prompt=String(body.prompt||'').trim().slice(0,1800);
       const filename=String(body.filename||'image.png').trim().slice(0,120);
-      const model=String(body.model||IMAGE_EDIT_MODEL).trim().slice(0,120);
-      const size=String(body.size||'1024x1024').trim().slice(0,32);
+      const model=String(body.model||IMAGE_EDIT_MODEL).trim().slice(0,180);
+      const size=String(body.size||'1024x1024').trim().slice(0,40);
       const dataUrl=String(body.dataUrl||'');
       const sourceUrl=String(body.sourceUrl||'');
       if(!prompt) return sendJson(res,400,{error:'Prompt de edição vazio'});
-      if(POLLINATIONS_KEY&&dataUrl){
-        const out=await editImageAuthenticated(dataUrl,prompt,filename,model,size);
-        return sendJson(res,200,{ok:true,...out,model,mode:'authenticated-edit'});
-      }
-      if(sourceUrl){
-        const url=editImageReferenceUrl(sourceUrl,prompt,model);
-        return sendJson(res,200,{ok:true,url,model,mode:'reference-edit'});
-      }
-      return sendJson(res,409,{error:'Para editar uma imagem enviada do celular, configure POLLINATIONS_KEY no Railway. Imagens geradas pelo CodeZero podem ser editadas sem isso.'});
-    }catch(e){
-      return sendJson(res,500,{error:'Falha ao editar imagem',details:String(e?.message||e)});
-    }
+      const out=await pollinationsEditImage(key,{dataUrl,sourceUrl,prompt,filename,model,size});
+      return sendJson(res,200,{ok:true,...out,model});
+    }catch(e){return sendJson(res,400,{error:'Falha ao editar imagem',details:String(e?.message||e)});}
   }
   if(pathnameSearch==='/image'&&req.method==='GET'){
+    const {sess,key}=pollenSessionKey(req,res);
+    if(!requireDevopsWrite(req,res,sess)) return;
     try{
       const u=new URL(req.url,'http://localhost');
-      const prompt=String(u.searchParams.get('prompt')||'').trim().slice(0,1200);
-      const model=String(u.searchParams.get('model')||IMAGE_MODEL).trim().slice(0,120);
+      const prompt=String(u.searchParams.get('prompt')||'').trim().slice(0,1800);
+      const model=String(u.searchParams.get('model')||IMAGE_MODEL).trim().slice(0,180);
       if(!prompt) return sendJson(res,400,{error:'Prompt de imagem vazio'});
-      const imageUrl=IMAGE_BASE_URL+'/image/'+encodeURIComponent(prompt)+'?model='+encodeURIComponent(model)+'&nologo=true';
-      return sendJson(res,200,{ok:true,prompt,model,url:imageUrl});
-    }catch(e){
-      return sendJson(res,500,{error:'Falha ao preparar imagem',details:String(e?.message||e)});
-    }
+      const out=await pollinationsGenerateImage(key,{prompt,model,size:'1024x1024'});
+      return sendJson(res,200,{ok:true,prompt,model,...out});
+    }catch(e){return sendJson(res,400,{error:'Falha ao gerar imagem',details:String(e?.message||e)});}
   }
   if(pathnameSearch==='/search'&&req.method==='GET'){
     try{
@@ -1344,7 +1483,7 @@ const server=http.createServer(async(req,res)=>{
     return sendJson(res,200,{
       status:'online',
       service:'CodeZero Railway',
-      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,imageEditModel:IMAGE_EDIT_MODEL,image:true,imageEdit:true,imageEditAuth:Boolean(POLLINATIONS_KEY)
+      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,imageEditModel:IMAGE_EDIT_MODEL,image:true,imageEdit:true,pollinationsAppKey:Boolean(POLLINATIONS_APP_KEY),pollinationsServerKey:Boolean(POLLINATIONS_KEY)
     });
   }
   if(req.url==='/chat'&&req.method==='POST') return handleChat(req,res);
