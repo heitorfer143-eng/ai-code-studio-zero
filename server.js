@@ -2,6 +2,7 @@ const crypto=require('crypto');
 const http=require('http');
 const fs=require('fs');
 const path=require('path');
+const {Pool}=require('pg');
 
 const PORT=process.env.PORT||3000;
 const ROOT=__dirname;
@@ -20,6 +21,120 @@ const CHAT_MODEL_CANDIDATES=(process.env.CHAT_MODEL_CANDIDATES||'gemini-3.1-flas
 const CODE_MODEL_CANDIDATES=(process.env.CODE_MODEL_CANDIDATES||'deepseek-v4-flash:0731,gemini-3.1-flash-lite,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
 let ACTIVE_CHAT_MODEL=FREE_GATEWAY_MODEL;
 let ACTIVE_CODE_MODEL=FREE_GATEWAY_MODEL;
+const AUTH_SESSIONS=new Map();
+const AUTH_TTL_MS=30*24*60*60*1000;
+const DATABASE_URL=process.env.DATABASE_URL||'';
+const AUTH_FALLBACK_FILE=path.join(ROOT,'.codezero-auth.json');
+let AUTH_DB=null;
+let AUTH_STORAGE_MODE='local-ephemeral';
+
+function normalizeUser(v){return String(v||'').trim().toLowerCase();}
+function validUser(v){return /^[a-z0-9._-]{3,40}$/.test(v);}
+function validPassword(v){return typeof v==='string'&&v.length>=10&&v.length<=200;}
+function authCookie(sid,secure){
+  return 'czauth='+encodeURIComponent(sid)+'; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000'+(secure?'; Secure':'');
+}
+function clearAuthCookie(secure){
+  return 'czauth=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'+(secure?'; Secure':'');
+}
+function hashPassword(password,saltHex=''){
+  const salt=saltHex?Buffer.from(saltHex,'hex'):crypto.randomBytes(16);
+  const hash=crypto.scryptSync(password,salt,64,{N:16384,r:8,p:1});
+  return {salt:salt.toString('hex'),hash:hash.toString('hex')};
+}
+function verifyPassword(password,salt,expected){
+  try{
+    const got=hashPassword(password,salt).hash;
+    const a=Buffer.from(got,'hex'),b=Buffer.from(String(expected||''),'hex');
+    return a.length===b.length&&a.length>0&&crypto.timingSafeEqual(a,b);
+  }catch{return false;}
+}
+function loadFallbackStore(){
+  try{
+    if(!fs.existsSync(AUTH_FALLBACK_FILE)) return {users:{},states:{}};
+    return JSON.parse(fs.readFileSync(AUTH_FALLBACK_FILE,'utf8'));
+  }catch{return {users:{},states:{}};}
+}
+function saveFallbackStore(data){
+  fs.writeFileSync(AUTH_FALLBACK_FILE,JSON.stringify(data),{mode:0o600});
+}
+async function initAuthStorage(){
+  if(!DATABASE_URL){
+    AUTH_STORAGE_MODE='local-ephemeral';
+    return;
+  }
+  AUTH_DB=new Pool({connectionString:DATABASE_URL,ssl:{rejectUnauthorized:false},max:4});
+  await AUTH_DB.query(`CREATE TABLE IF NOT EXISTS cz_users(
+    id TEXT PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    password_salt TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await AUTH_DB.query(`CREATE TABLE IF NOT EXISTS cz_workspace(
+    user_id TEXT PRIMARY KEY REFERENCES cz_users(id) ON DELETE CASCADE,
+    state JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  AUTH_STORAGE_MODE='postgres';
+}
+async function authFindUser(username){
+  if(AUTH_DB){
+    const r=await AUTH_DB.query('SELECT id,username,password_hash,password_salt FROM cz_users WHERE username=$1',[username]);
+    return r.rows[0]||null;
+  }
+  const db=loadFallbackStore(); return db.users[username]||null;
+}
+async function authCreateUser(username,password){
+  const id=crypto.randomUUID();
+  const hp=hashPassword(password);
+  if(AUTH_DB){
+    await AUTH_DB.query('INSERT INTO cz_users(id,username,password_hash,password_salt) VALUES($1,$2,$3,$4)',[id,username,hp.hash,hp.salt]);
+  }else{
+    const db=loadFallbackStore();
+    if(db.users[username]) throw new Error('Usuário já existe');
+    db.users[username]={id,username,password_hash:hp.hash,password_salt:hp.salt};
+    saveFallbackStore(db);
+  }
+  return {id,username};
+}
+async function authSaveState(userId,state){
+  const safeState=state&&typeof state==='object'?state:{};
+  if(AUTH_DB){
+    await AUTH_DB.query(`INSERT INTO cz_workspace(user_id,state,updated_at) VALUES($1,$2,NOW())
+      ON CONFLICT(user_id) DO UPDATE SET state=EXCLUDED.state,updated_at=NOW()`,[userId,safeState]);
+  }else{
+    const db=loadFallbackStore(); db.states[userId]=safeState; saveFallbackStore(db);
+  }
+}
+async function authLoadState(userId){
+  if(AUTH_DB){
+    const r=await AUTH_DB.query('SELECT state,updated_at FROM cz_workspace WHERE user_id=$1',[userId]);
+    return r.rows[0]?{state:r.rows[0].state,updatedAt:r.rows[0].updated_at}:null;
+  }
+  const db=loadFallbackStore();
+  return db.states[userId]?{state:db.states[userId],updatedAt:null}:null;
+}
+function getAuthSession(req){
+  const sid=parseCookies(req).czauth;
+  const sess=sid?AUTH_SESSIONS.get(sid):null;
+  if(!sess) return null;
+  if(Date.now()-sess.lastSeen>AUTH_TTL_MS){AUTH_SESSIONS.delete(sid);return null;}
+  sess.lastSeen=Date.now(); return sess;
+}
+function createAuthSession(res,req,user){
+  const sid=randomToken(32),csrf=randomToken(24);
+  AUTH_SESSIONS.set(sid,{sid,csrf,userId:user.id,username:user.username,lastSeen:Date.now()});
+  res.setHeader('Set-Cookie',authCookie(sid,requestIsHttps(req)));
+  return AUTH_SESSIONS.get(sid);
+}
+function requireAuthWrite(req,res,sess){
+  if(!sess){sendJson(res,401,{error:'Faça login'});return false;}
+  if(!sameOrigin(req)){sendJson(res,403,{error:'Origem inválida'});return false;}
+  if(!safeEqual(req.headers['x-csrf-token'],sess.csrf)){sendJson(res,403,{error:'CSRF inválido'});return false;}
+  return true;
+}
+
 const DEVOPS_SESSIONS=new Map();
 const SESSION_TTL_MS=12*60*60*1000;
 const GITHUB_API='https://api.github.com';
@@ -1180,4 +1295,4 @@ const server=http.createServer(async(req,res)=>{
     fs.createReadStream(file).pipe(res);
   });
 });
-server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'brain-v10'}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) providerSelfTest();});
+initAuthStorage().then(()=>server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'brain-v10'} · storage ${AUTH_STORAGE_MODE}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) providerSelfTest();})).catch(err=>{console.error('Auth storage init failed',err);process.exit(1);});
