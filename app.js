@@ -15,6 +15,7 @@ let assets=JSON.parse(localStorage.getItem(ASSET_KEY)||'{}')||{};
 let projectMemory=JSON.parse(localStorage.getItem(PROJECT_MEMORY_KEY)||'[]')||[];
 let active=Object.keys(files)[0];
 let busy=false;
+let lastChangedFiles=[];
 let chats=loadChats();
 let activeChatId=localStorage.getItem(ACTIVE_CHAT_KEY)||chats[0].id;
 if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
@@ -136,6 +137,8 @@ function projectMemoryText(){
 
 function resetProject(){
   if(!confirm('Resetar o projeto atual? Os chats serão mantidos.')) return;
+  document.body.classList.toggle('godot-mode',isGodotProject());
+
   if(isGodotProject()){
     createGodotProject();
     status('↻ Projeto Godot resetado');
@@ -320,7 +323,7 @@ function tabs(){
   Object.keys(files).forEach(f=>{
     const b=document.createElement('button');
     b.textContent=f;
-    b.className=f===active?'active':'';
+    b.className=(f===active?'active ':'')+(lastChangedFiles.includes(f)?'changed':'');
     b.onclick=()=>openFile(f);
     n.append(b);
   });
@@ -389,6 +392,46 @@ function projectContext(){
   const assetList=Object.keys(assets).length?'\n\nASSETS GERADOS DISPONÍVEIS:\n'+Object.keys(assets).map(n=>'assets/'+n).join('\n'):'';
   return (code+assetList).slice(0,32000);
 }
+async function applyFilesVisible(text){
+  const re=/<<<FILE:([^>]+)>>>([\s\S]*?)<<<END_FILE>>>/g;
+  const changes=[];
+  let m;
+  while((m=re.exec(String(text||'')))){
+    const name=m[1].trim().replace(/^\/+/,''),content=m[2].replace(/^\n/,'').replace(/\n$/,'');
+    if(!/^[\w.\-\/]+$/.test(name)) continue;
+    changes.push({name,content});
+  }
+  if(!changes.length) return [];
+
+  lastChangedFiles=changes.map(x=>x.name);
+  tabs();
+
+  // Aplica arquivo por arquivo e mostra no editor.
+  for(const change of changes){
+    files[change.name]=change.content;
+    active=change.name;
+    $('#editor').value=change.content;
+    tabs();
+    lines();
+    status('✍️ Aplicando '+change.name+'…');
+
+    // animação curta de aplicação visível sem atrasar demais projetos grandes
+    const editor=$('#editor');
+    editor.classList.add('ai-writing');
+    editor.scrollTop=0;
+    await new Promise(r=>setTimeout(r,Math.min(220,60+change.content.length/120)));
+    editor.classList.remove('ai-writing');
+  }
+
+  save();
+  run();
+  setTimeout(()=>{
+    lastChangedFiles=[];
+    tabs();
+  },4500);
+  return changes.map(x=>x.name);
+}
+
 function applyFiles(text){
   const re=/<<<FILE:([^>]+)>>>([\s\S]*?)<<<END_FILE>>>/g;
   let m,changed=[];
@@ -462,7 +505,8 @@ async function send(){
     if(!full.trim()) throw new Error('O CodeZero respondeu vazio.');
     const generatedImages=await processImageRequests(full);
     const editedImages=await processEditImageRequests(full);
-    const changed=applyFiles(full);
+    const changed=await applyFilesVisible(full);
+    if(changed.length) $('#editor').focus();
     if(changed.length) rememberProjectChange(p,changed,{projectType:data?.projectType,complexity:data?.complexity});
     const clean=(visibleReply(full)||'Projeto atualizado.')+(changed.length?'\n\n✓ '+changed.join(', '):'')+(generatedImages.length?'\n🖼️ Geradas: '+generatedImages.map(x=>'assets/'+x.name).join(', '):'')+(editedImages.length?'\n🛠️ Editadas: '+editedImages.map(x=>'assets/'+x.name).join(', '):'');
     chat.messages.push({role:'assistant',content:full,display:clean,sources:data?.sources||[]});
