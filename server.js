@@ -400,6 +400,25 @@ function taskComplexity(message,project){
 function projectFileNames(project){
   return [...String(project||'').matchAll(/^ARQUIVO\s+([^:]+):/gm)].map(m=>m[1].trim());
 }
+function attachmentContext(attachments){
+  if(!Array.isArray(attachments)||!attachments.length) return '';
+  const parts=[];
+  for(const a of attachments.slice(0,8)){
+    const name=String(a?.name||'arquivo').slice(0,160);
+    const type=String(a?.type||'').slice(0,100);
+    const kind=String(a?.kind||'file').slice(0,40);
+    const text=String(a?.text||'').slice(0,22000);
+    const note=String(a?.note||'').slice(0,600);
+    parts.push(
+      'ANEXO: '+name+
+      '\nTipo: '+(type||kind)+
+      (note?'\nObservação: '+note:'')+
+      (text?'\nConteúdo extraído:\n'+text:'\nConteúdo textual não disponível.')
+    );
+  }
+  return parts.length?'\n\nANEXOS DO USUÁRIO:\n'+parts.join('\n\n---\n\n'):'';
+}
+
 async function freeGatewayChat(payload){
   const message=String(payload.message||'').trim();
   const wantsCode=codingIntent(message);
@@ -409,6 +428,7 @@ async function freeGatewayChat(payload){
   const project=wantsCode?String(payload.project||'').slice(0,32000):'';
   const memory=String(payload.memory||'').slice(0,6000);
   const history=Array.isArray(payload.history)?payload.history.slice(-12):[];
+  const attachmentsText=attachmentContext(payload.attachments);
   const complexity=taskComplexity(message,project);
   const projectMap=buildProjectMap(project);
   const projectMapText=JSON.stringify(projectMap,null,2).slice(0,8000);
@@ -429,12 +449,13 @@ async function freeGatewayChat(payload){
       'Não transforme conversa casual em programação.',
       'Quando houver pesquisa web, use as fontes e cite [1], [2] etc.',
       'Quando o usuário perguntar sobre Godot, priorize Godot 4.x e GDScript atuais.',
-      'Se não souber algo, diga o que falta em vez de inventar.'
+      'Se não souber algo, diga o que falta em vez de inventar.',
+      'Quando houver anexos, use o conteúdo extraído. Em imagens com OCR, trate o texto extraído como leitura aproximada e não invente detalhes visuais que não estejam descritos.'
     ].join(' ');
     const messages=[
       {role:'system',content:systemPrompt},
       ...history,
-      {role:'user',content:message+(memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+webContext}
+      {role:'user',content:message+(memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+attachmentsText+webContext}
     ];
     const response=await gatewayCompletion(messages,ACTIVE_CHAT_MODEL,2600,0.3);
     return {response,provider:'brain-v10',model:ACTIVE_CHAT_MODEL,mode:'chat',complexity,searched:wantsWeb,sources:sources.map(({title,url})=>({title,url}))};
@@ -458,6 +479,7 @@ async function freeGatewayChat(payload){
       '\n\nMAPA DO PROJETO:\n'+projectMapText+
       (memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+
       '\n\nPROJETO ATUAL:\n'+project+
+      attachmentsText+
       webContext
     }
   ];
@@ -493,6 +515,7 @@ async function freeGatewayChat(payload){
       '\n\nMAPA DO PROJETO:\n'+projectMapText+
       (memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+
       '\n\nPROJETO ATUAL:\n'+project+
+      attachmentsText+
       webContext
     }
   ];
