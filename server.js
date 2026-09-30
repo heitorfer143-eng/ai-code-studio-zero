@@ -1050,6 +1050,70 @@ const server=http.createServer(async(req,res)=>{
     });
     return res.end();
   }
+  if(pathnameSearch==='/auth/session'&&req.method==='GET'){
+    const sess=getAuthSession(req);
+    if(!sess) return sendJson(res,200,{ok:true,authenticated:false,storage:AUTH_STORAGE_MODE,persistent:AUTH_STORAGE_MODE==='postgres'});
+    return sendJson(res,200,{ok:true,authenticated:true,username:sess.username,csrf:sess.csrf,storage:AUTH_STORAGE_MODE,persistent:AUTH_STORAGE_MODE==='postgres'});
+  }
+  if(pathnameSearch==='/auth/register'&&req.method==='POST'){
+    try{
+      if(!sameOrigin(req)) return sendJson(res,403,{error:'Origem inválida'});
+      const body=await readJson(req,200000);
+      const username=normalizeUser(body.username),password=String(body.password||'');
+      if(!validUser(username)) return sendJson(res,400,{error:'Usuário deve ter 3–40 caracteres: letras minúsculas, números, ., _ ou -'});
+      if(!validPassword(password)) return sendJson(res,400,{error:'Senha deve ter pelo menos 10 caracteres'});
+      if(await authFindUser(username)) return sendJson(res,409,{error:'Usuário já existe'});
+      const user=await authCreateUser(username,password);
+      const sess=createAuthSession(res,req,user);
+      return sendJson(res,201,{ok:true,authenticated:true,username:user.username,csrf:sess.csrf,storage:AUTH_STORAGE_MODE,persistent:AUTH_STORAGE_MODE==='postgres'});
+    }catch(e){
+      return sendJson(res,400,{error:'Falha ao criar conta',details:String(e?.message||e)});
+    }
+  }
+  if(pathnameSearch==='/auth/login'&&req.method==='POST'){
+    try{
+      if(!sameOrigin(req)) return sendJson(res,403,{error:'Origem inválida'});
+      const body=await readJson(req,200000);
+      const username=normalizeUser(body.username),password=String(body.password||'');
+      const user=await authFindUser(username);
+      if(!user||!verifyPassword(password,user.password_salt,user.password_hash)){
+        await sleep(350);
+        return sendJson(res,401,{error:'Usuário ou senha inválidos'});
+      }
+      const sess=createAuthSession(res,req,{id:user.id,username:user.username});
+      return sendJson(res,200,{ok:true,authenticated:true,username:user.username,csrf:sess.csrf,storage:AUTH_STORAGE_MODE,persistent:AUTH_STORAGE_MODE==='postgres'});
+    }catch(e){return sendJson(res,401,{error:'Falha no login'});}
+  }
+  if(pathnameSearch==='/auth/logout'&&req.method==='POST'){
+    const sess=getAuthSession(req);
+    if(sess&&!requireAuthWrite(req,res,sess)) return;
+    const sid=parseCookies(req).czauth;
+    if(sid) AUTH_SESSIONS.delete(sid);
+    res.setHeader('Set-Cookie',clearAuthCookie(requestIsHttps(req)));
+    return sendJson(res,200,{ok:true});
+  }
+  if(pathnameSearch==='/account/state'&&req.method==='GET'){
+    const sess=getAuthSession(req);
+    if(!sess) return sendJson(res,401,{error:'Faça login'});
+    try{
+      const saved=await authLoadState(sess.userId);
+      return sendJson(res,200,{ok:true,state:saved?.state||null,updatedAt:saved?.updatedAt||null,storage:AUTH_STORAGE_MODE,persistent:AUTH_STORAGE_MODE==='postgres'});
+    }catch(e){return sendJson(res,500,{error:'Falha ao carregar projeto',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/account/state'&&req.method==='POST'){
+    const sess=getAuthSession(req);
+    if(!requireAuthWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,12*1024*1024);
+      const state=body.state;
+      if(!state||typeof state!=='object') return sendJson(res,400,{error:'Estado inválido'});
+      const size=Buffer.byteLength(JSON.stringify(state));
+      if(size>10*1024*1024) return sendJson(res,413,{error:'Projeto excede 10 MB para sincronização da conta'});
+      await authSaveState(sess.userId,state);
+      return sendJson(res,200,{ok:true,savedAt:new Date().toISOString(),bytes:size,storage:AUTH_STORAGE_MODE,persistent:AUTH_STORAGE_MODE==='postgres'});
+    }catch(e){return sendJson(res,500,{error:'Falha ao salvar projeto',details:String(e?.message||e)});}
+  }
+
   if(pathnameSearch==='/devops/session'&&req.method==='GET'){
     const sess=getDevopsSession(req,res,true);
     return sendJson(res,200,{ok:true,...devopsPublicState(sess)});
