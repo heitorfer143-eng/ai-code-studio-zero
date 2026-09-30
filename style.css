@@ -147,3 +147,22 @@ body.godot-mode .workspace{grid-template-columns:210px 1fr;grid-template-rows:48
   #diffBefore{border-right:0;border-bottom:1px solid var(--line)}
   .modalCard{height:94vh}
 }
+
+/* V12 DevOps */
+.devopsCard{width:min(980px,96vw);height:min(760px,92vh)}
+.devopsSecurity{padding:10px 14px;border-bottom:1px solid var(--line);background:#0c1622;color:#9fc5ff;font-size:12px}
+.devopsGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px;overflow:auto}
+.devopsSection{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel2);display:grid;gap:10px;align-content:start}
+.devopsSection h3{margin:0;font-size:15px}
+.devopsState{padding:8px;border-radius:8px;background:#071019;color:var(--muted)}
+.devopsActions{display:flex;gap:6px;flex-wrap:wrap}
+.devopsActions button{padding:7px 9px}
+.devopsSection label{display:grid;gap:5px;font-size:11px;color:var(--muted)}
+.devopsSection select{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px}
+.devopsResult{min-height:60px;max-height:240px;overflow:auto;white-space:pre-wrap;border:1px solid var(--line);border-radius:8px;padding:8px;background:#05080d;color:#d7e2f1;font:11px/1.4 monospace}
+.devopsResult.error{color:#ff9da5;border-color:#8d3945}
+.deploymentRow{display:block;width:100%;text-align:left;margin-bottom:5px;background:#0d1520}
+@media(max-width:900px){
+  .devopsGrid{grid-template-columns:1fr}
+  .devopsCard{height:94vh}
+}
