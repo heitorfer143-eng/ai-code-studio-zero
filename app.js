@@ -33,14 +33,35 @@ let chats=loadChats();
 let activeChatId=localStorage.getItem(ACTIVE_CHAT_KEY)||chats[0].id;
 if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
 
-async function pollenFetch(url,options={}){
-  const opts={credentials:'same-origin',...options,headers:{...(options.headers||{})}};
-  if((opts.method||'GET').toUpperCase()!=='GET'){
-    opts.headers['Content-Type']=opts.headers['Content-Type']||'application/json';
-    if(devopsCsrf) opts.headers['X-CSRF-Token']=devopsCsrf;
-  }
-  const r=await fetch(url,opts);
+async function ensureDevopsCsrf(){
+  if(devopsCsrf) return devopsCsrf;
+  const r=await fetch('/devops/session',{credentials:'same-origin'});
   const data=await r.json().catch(()=>({}));
+  if(!r.ok||!data?.csrf) throw new Error(data?.error||'Não foi possível iniciar a sessão segura.');
+  devopsCsrf=data.csrf;
+  if(data.github||data.railway){
+    devopsState={github:data.github||{connected:false},railway:data.railway||{connected:false}};
+    renderDevopsState();
+  }
+  return devopsCsrf;
+}
+async function pollenFetch(url,options={}){
+  const method=String(options.method||'GET').toUpperCase();
+  const opts={credentials:'same-origin',...options,headers:{...(options.headers||{})}};
+  if(method!=='GET'&&method!=='HEAD'){
+    await ensureDevopsCsrf();
+    opts.headers['Content-Type']=opts.headers['Content-Type']||'application/json';
+    opts.headers['X-CSRF-Token']=devopsCsrf;
+  }
+  let r=await fetch(url,opts);
+  let data=await r.json().catch(()=>({}));
+  if(r.status===403&&/CSRF/i.test(String(data?.error||''))&&method!=='GET'&&method!=='HEAD'){
+    devopsCsrf='';
+    await ensureDevopsCsrf();
+    opts.headers['X-CSRF-Token']=devopsCsrf;
+    r=await fetch(url,opts);
+    data=await r.json().catch(()=>({}));
+  }
   if(!r.ok) throw new Error(data?.details||data?.error||('HTTP '+r.status));
   return data;
 }
@@ -102,7 +123,9 @@ async function loadMediaModels(){
 }
 async function initPollen(){
   try{
+    await ensureDevopsCsrf();
     const data=await pollenFetch('/pollen/status');
+    if(data?.csrf) devopsCsrf=data.csrf;
     pollenState=data; renderPollenState();
   }catch(e){console.warn('pollen status',e);}
 }
@@ -1625,6 +1648,8 @@ renderFileTree();
 lines();
 run();
 status('☁️ CodeZero • Railway');
-initDevops();
-initAccount();
-initPollen();
+(async()=>{
+  await initDevops();
+  await initAccount();
+  await initPollen();
+})();
