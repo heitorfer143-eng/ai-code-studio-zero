@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <title>CodeZero AI Code Studio V10.2</title>
-  <link rel="stylesheet" href="style.css?v=10.2.0">
+  <title>CodeZero AI Code Studio V11.0</title>
+  <link rel="stylesheet" href="style.css?v=11.0.0">
 </head>
 <body>
   <header>
     <button id="chatToggle" class="ghost">☰ Chats</button>
-    <b>⚡ CodeZero <small>V10.2</small></b>
+    <b>⚡ CodeZero <small>V11.0</small></b>
     <span id="status">☁️ Railway</span>
     <button id="theme">☀/☾</button>
-    <button id="uploadImage">📤 Asset</button><button id="new3D">🎮 Novo Godot</button><button id="exportGodot">📦 Baixar Godot ZIP</button><button id="resetProject">↻ Resetar</button><button id="run">▶ Ver projeto</button>
+    <button id="importGodot">📥 Importar ZIP</button><input id="zipInput" type="file" hidden accept=".zip,application/zip"><button id="undoAI" title="Desfazer alteração da IA">↶</button><button id="redoAI" title="Refazer alteração da IA">↷</button><button id="uploadImage">📤 Asset</button><button id="new3D">🎮 Novo Godot</button><button id="exportGodot">📦 Baixar Godot ZIP</button><button id="resetProject">↻ Resetar</button><button id="run">▶ Ver projeto</button>
   </header>
 
   <div class="shell">
@@ -27,7 +27,7 @@
 
     <main>
       <section class="chat">
-        <div id="messages"></div>
+        <div id="taskProgress" class="taskProgress hidden"><div class="taskProgressTop"><strong id="taskProgressTitle">Executando tarefa</strong><span id="taskProgressPct">0%</span></div><div class="taskBar"><i id="taskBarFill"></i></div><div id="taskSteps"></div></div><div id="messages"></div>
         <div id="attachments"></div>
         <div class="composer">
           <input id="attachmentInput" type="file" hidden multiple accept="image/*,.pdf,.txt,.md,.markdown,.json,.jsonc,.js,.mjs,.cjs,.ts,.tsx,.jsx,.html,.css,.scss,.xml,.yml,.yaml,.csv,.log,.ini,.cfg,.conf,.env,.gd,.tscn,.tres,.gdshader,.godot,.py,.java,.c,.cc,.cpp,.h,.hpp,.cs,.go,.rs,.php,.rb,.sh,.sql">
@@ -39,6 +39,14 @@
 
       <section class="workspace">
         <nav id="tabs"></nav>
+        <aside id="fileExplorer">
+          <div class="explorerHead">
+            <strong>Projeto</strong>
+            <button id="newFile" title="Novo arquivo">＋</button>
+          </div>
+          <input id="fileSearch" type="search" placeholder="Buscar arquivo...">
+          <div id="fileTree"></div>
+        </aside>
         <div class="code">
           <pre id="lines">1</pre>
           <textarea id="editor" spellcheck="false"></textarea>
@@ -51,7 +59,15 @@
     </main>
   </div>
 
-  <div id="drawerShade"></div>
-  <script type="module" src="app.js?v=10.2.0"></script>
+  <div id="diffModal" class="modal hidden">
+      <div class="modalCard">
+        <div class="modalHead"><strong>Revisar alterações da IA</strong><button id="diffClose">×</button></div>
+        <div id="diffFiles"></div>
+        <div class="diffPanels"><pre id="diffBefore"></pre><pre id="diffAfter"></pre></div>
+        <div class="modalActions"><button id="diffReject">Rejeitar</button><button id="diffAccept">Aplicar alterações</button></div>
+      </div>
+    </div>
+    <div id="drawerShade"></div>
+  <script type="module" src="app.js?v=11.0.0"></script>
 </body>
 </html>
