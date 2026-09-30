@@ -9,6 +9,7 @@ const CHAT_KEY='zero.chats.v1';
 const ACTIVE_CHAT_KEY='zero.activeChat.v1';
 const ASSET_KEY='zero.assets.v1';
 const PROJECT_MEMORY_KEY='zero.project.memory.v1';
+const CHECKPOINT_KEY='zero.checkpoints.v1';
 
 let files=JSON.parse(localStorage.getItem('zero.files')||'null')||DEFAULT;
 let assets=JSON.parse(localStorage.getItem(ASSET_KEY)||'{}')||{};
@@ -17,6 +18,9 @@ let active=Object.keys(files)[0];
 let busy=false;
 let lastChangedFiles=[];
 let pendingAttachments=[];
+let checkpoints=JSON.parse(localStorage.getItem(CHECKPOINT_KEY)||'[]')||[];
+let checkpointIndex=checkpoints.length-1;
+let taskProgressTimer=null;
 let chats=loadChats();
 let activeChatId=localStorage.getItem(ACTIVE_CHAT_KEY)||chats[0].id;
 if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
@@ -113,6 +117,115 @@ function closeChatDrawer(){
 
 function save(){localStorage.setItem('zero.files',JSON.stringify(files))}
 function saveAssets(){localStorage.setItem(ASSET_KEY,JSON.stringify(assets))}
+function saveCheckpoints(){
+  checkpoints=checkpoints.slice(-20);
+  checkpointIndex=Math.min(checkpointIndex,checkpoints.length-1);
+  localStorage.setItem(CHECKPOINT_KEY,JSON.stringify(checkpoints));
+  updateCheckpointButtons();
+}
+function createCheckpoint(label='Checkpoint'){
+  if(files[active]!=null) files[active]=$('#editor').value;
+  const snap={label,at:Date.now(),files:JSON.parse(JSON.stringify(files)),assets:JSON.parse(JSON.stringify(assets)),active};
+  if(checkpointIndex<checkpoints.length-1) checkpoints=checkpoints.slice(0,checkpointIndex+1);
+  checkpoints.push(snap);
+  checkpointIndex=checkpoints.length-1;
+  saveCheckpoints();
+}
+function restoreCheckpoint(index){
+  const snap=checkpoints[index];
+  if(!snap) return;
+  files=JSON.parse(JSON.stringify(snap.files||{}));
+  assets=JSON.parse(JSON.stringify(snap.assets||{}));
+  active=files[snap.active]!=null?snap.active:Object.keys(files)[0];
+  checkpointIndex=index;
+  save();
+  saveAssets();
+  $('#editor').value=files[active]||'';
+  tabs();
+  renderFileTree();
+  renderAssets();
+  lines();
+  run();
+  saveCheckpoints();
+  status('↶ '+(snap.label||'Checkpoint'));
+}
+function undoAI(){
+  if(checkpointIndex<=0){status('⚠️ Nada anterior para desfazer');return;}
+  restoreCheckpoint(checkpointIndex-1);
+}
+function redoAI(){
+  if(checkpointIndex>=checkpoints.length-1){status('⚠️ Nada para refazer');return;}
+  restoreCheckpoint(checkpointIndex+1);
+}
+function updateCheckpointButtons(){
+  const u=$('#undoAI'),r=$('#redoAI');
+  if(u) u.disabled=checkpointIndex<=0;
+  if(r) r.disabled=checkpointIndex<0||checkpointIndex>=checkpoints.length-1;
+}
+function ensureInitialCheckpoint(){
+  if(!checkpoints.length){
+    checkpoints=[{label:'Estado inicial',at:Date.now(),files:JSON.parse(JSON.stringify(files)),assets:JSON.parse(JSON.stringify(assets)),active}];
+    checkpointIndex=0;
+    saveCheckpoints();
+  }
+}
+
+function fileIcon(name){
+  if(name.endsWith('.gd')) return '🟦';
+  if(name.endsWith('.tscn')) return '🎬';
+  if(name.endsWith('.tres')) return '🧩';
+  if(name.endsWith('.gdshader')) return '✨';
+  if(name==='project.godot') return '🎮';
+  if(/\.(png|jpg|jpeg|webp|gif)$/i.test(name)) return '🖼️';
+  return '📄';
+}
+function renderFileTree(filter=''){
+  const root=$('#fileTree');
+  if(!root) return;
+  root.textContent='';
+  const q=String(filter||'').toLowerCase();
+  const names=Object.keys(files).filter(n=>!q||n.toLowerCase().includes(q)).sort((a,b)=>a.localeCompare(b));
+  if(!names.length){
+    const e=document.createElement('div'); e.className='treeEmpty'; e.textContent='Nenhum arquivo'; root.append(e); return;
+  }
+  for(const name of names){
+    const row=document.createElement('button');
+    row.className='treeFile'+(name===active?' active':'')+(lastChangedFiles.includes(name)?' changed':'');
+    row.dataset.name=name;
+    const depth=(name.match(/\//g)||[]).length;
+    row.style.paddingLeft=(10+depth*13)+'px';
+    row.textContent=fileIcon(name)+' '+name;
+    row.onclick=()=>openFile(name);
+    row.oncontextmenu=e=>{
+      e.preventDefault();
+      const action=prompt('Arquivo: '+name+'\nDigite R para renomear ou D para excluir:','R');
+      if(!action) return;
+      if(action.toLowerCase()==='d'){
+        if(confirm('Excluir '+name+'?')){
+          createCheckpoint('Antes de excluir '+name);
+          delete files[name];
+          active=Object.keys(files)[0]||'';
+          save(); tabs(); renderFileTree(); $('#editor').value=files[active]||''; lines(); run();
+        }
+      }else if(action.toLowerCase()==='r'){
+        const nn=prompt('Novo caminho/nome:',name);
+        if(nn&&nn!==name&&/^[\w.\-\/]+$/.test(nn)){
+          createCheckpoint('Antes de renomear '+name);
+          files[nn]=files[name]; delete files[name]; active=nn; save(); tabs(); renderFileTree(); openFile(nn);
+        }
+      }
+    };
+    root.append(row);
+  }
+}
+function createFileManual(){
+  const name=prompt('Nome/caminho do novo arquivo:','scripts/new_script.gd');
+  if(!name||!/^[\w.\-\/]+$/.test(name)||files[name]!=null) return;
+  createCheckpoint('Antes de criar '+name);
+  files[name]=name.endsWith('.gd')?'extends Node\n':name.endsWith('.tscn')?'[gd_scene format=3]\n':'';
+  active=name; save(); tabs(); renderFileTree(); openFile(name);
+}
+
 function saveProjectMemory(){
   localStorage.setItem(PROJECT_MEMORY_KEY,JSON.stringify(projectMemory.slice(-30)));
 }
@@ -328,6 +441,7 @@ function tabs(){
     b.onclick=()=>openFile(f);
     n.append(b);
   });
+  renderFileTree($('#fileSearch')?.value||'');
 }
 function openFile(f){
   if(files[active]!=null) files[active]=$('#editor').value;
@@ -335,6 +449,7 @@ function openFile(f){
   $('#editor').value=files[f]||'';
   save();
   tabs();
+  renderFileTree($('#fileSearch')?.value||'');
   lines();
 }
 function lines(){
@@ -490,30 +605,82 @@ function projectContext(){
   const assetList=Object.keys(assets).length?'\n\nASSETS GERADOS DISPONÍVEIS:\n'+Object.keys(assets).map(n=>'assets/'+n).join('\n'):'';
   return (code+assetList).slice(0,32000);
 }
-async function applyFilesVisible(text){
+function parseChangesFromResponse(text){
+  const out=[];
   const re=/<<<FILE:([^>]+)>>>([\s\S]*?)<<<END_FILE>>>/g;
-  const changes=[];
   let m;
   while((m=re.exec(String(text||'')))){
     const name=m[1].trim().replace(/^\/+/,''),content=m[2].replace(/^\n/,'').replace(/\n$/,'');
-    if(!/^[\w.\-\/]+$/.test(name)) continue;
-    changes.push({name,content});
+    if(/^[\w.\-\/]+$/.test(name)) out.push({name,content,before:files[name]||''});
   }
+  return out;
+}
+function reviewDiff(changes){
+  if(!changes.length) return Promise.resolve(true);
+  const modal=$('#diffModal'),list=$('#diffFiles'),before=$('#diffBefore'),after=$('#diffAfter');
+  if(!modal||!list) return Promise.resolve(true);
+  list.textContent='';
+  let current=0;
+  const show=i=>{
+    current=i;
+    [...list.children].forEach((b,j)=>b.classList.toggle('active',j===i));
+    before.textContent=changes[i].before||'(arquivo novo)';
+    after.textContent=changes[i].content;
+  };
+  changes.forEach((c,i)=>{
+    const b=document.createElement('button'); b.textContent=c.name; b.onclick=()=>show(i); list.append(b);
+  });
+  show(0); modal.classList.remove('hidden');
+  return new Promise(resolve=>{
+    const finish=v=>{modal.classList.add('hidden'); $('#diffAccept').onclick=null; $('#diffReject').onclick=null; $('#diffClose').onclick=null; resolve(v);};
+    $('#diffAccept').onclick=()=>finish(true);
+    $('#diffReject').onclick=()=>finish(false);
+    $('#diffClose').onclick=()=>finish(false);
+  });
+}
+function startTaskProgress(){
+  const box=$('#taskProgress'),fill=$('#taskBarFill'),pct=$('#taskProgressPct'),steps=$('#taskSteps');
+  if(!box) return;
+  const labels=['Analisando projeto','Planejando alterações','Programando','Validando arquivos','Revisando solução'];
+  box.classList.remove('hidden');
+  steps.textContent='';
+  labels.forEach((x,i)=>{const d=document.createElement('div');d.className='taskStep';d.dataset.i=i;d.textContent='○ '+x;steps.append(d);});
+  let i=0,progress=8;
+  const tick=()=>{
+    progress=Math.min(92,progress+(i<2?9:5));
+    if(progress>[22,42,68,82,92][i]&&i<labels.length-1)i++;
+    fill.style.width=progress+'%'; pct.textContent=progress+'%';
+    [...steps.children].forEach((el,j)=>{el.classList.toggle('active',j===i);el.classList.toggle('done',j<i);el.textContent=(j<i?'✓ ':j===i?'● ':'○ ')+labels[j];});
+  };
+  tick();
+  clearInterval(taskProgressTimer);
+  taskProgressTimer=setInterval(tick,900);
+}
+function finishTaskProgress(ok=true){
+  clearInterval(taskProgressTimer); taskProgressTimer=null;
+  const box=$('#taskProgress'),fill=$('#taskBarFill'),pct=$('#taskProgressPct');
+  if(!box) return;
+  fill.style.width=(ok?100:0)+'%'; pct.textContent=ok?'100%':'Falhou';
+  setTimeout(()=>box.classList.add('hidden'),ok?1200:2200);
+}
+
+async function applyFilesVisible(text){
+  const changes=parseChangesFromResponse(text);
   if(!changes.length) return [];
 
+  createCheckpoint('Antes da alteração da IA');
   lastChangedFiles=changes.map(x=>x.name);
   tabs();
+  renderFileTree();
 
-  // Aplica arquivo por arquivo e mostra no editor.
   for(const change of changes){
     files[change.name]=change.content;
     active=change.name;
     $('#editor').value=change.content;
     tabs();
+    renderFileTree();
     lines();
     status('✍️ Aplicando '+change.name+'…');
-
-    // animação curta de aplicação visível sem atrasar demais projetos grandes
     const editor=$('#editor');
     editor.classList.add('ai-writing');
     editor.scrollTop=0;
@@ -523,13 +690,10 @@ async function applyFilesVisible(text){
 
   save();
   run();
-  setTimeout(()=>{
-    lastChangedFiles=[];
-    tabs();
-  },4500);
+  createCheckpoint('Depois da alteração da IA');
+  setTimeout(()=>{lastChangedFiles=[];tabs();renderFileTree();},4500);
   return changes.map(x=>x.name);
 }
-
 function applyFiles(text){
   const re=/<<<FILE:([^>]+)>>>([\s\S]*?)<<<END_FILE>>>/g;
   let m,changed=[];
@@ -589,6 +753,7 @@ async function send(){
   busy=true;
   $('#send').disabled=true;
   const waiting=appendMessage('ai','Pensando…');
+  startTaskProgress();
   try{
     status('🧠 CodeZero pensando…');
     const r=await fetch(API,{
@@ -607,7 +772,13 @@ async function send(){
     if(!full.trim()) throw new Error('O CodeZero respondeu vazio.');
     const generatedImages=await processImageRequests(full);
     const editedImages=await processEditImageRequests(full);
-    const changed=await applyFilesVisible(full);
+    const proposed=parseChangesFromResponse(full);
+    let changed=[];
+    if(proposed.length){
+      const accepted=await reviewDiff(proposed);
+      if(accepted) changed=await applyFilesVisible(full);
+      else status('🚫 Alterações rejeitadas');
+    }
     if(changed.length) $('#editor').focus();
     if(changed.length) rememberProjectChange(p,changed,{projectType:data?.projectType,complexity:data?.complexity});
     const clean=(visibleReply(full)||'Projeto atualizado.')+(changed.length?'\n\n✓ '+changed.join(', '):'')+(generatedImages.length?'\n🖼️ Geradas: '+generatedImages.map(x=>'assets/'+x.name).join(', '):'')+(editedImages.length?'\n🛠️ Editadas: '+editedImages.map(x=>'assets/'+x.name).join(', '):'');
@@ -617,12 +788,14 @@ async function send(){
     waiting.remove();
     renderMessages();
     renderChatList();
+    finishTaskProgress(true);
     if(data?.validated){
       status('✅ V10 validou '+(data.changedFiles?.length||changed.length)+' arquivo(s) • '+(data.complexity||'normal'));
     }else{
       status(data?.searched?'🌐 CodeZero pesquisou e respondeu':'✅ CodeZero respondeu');
     }
   }catch(e){
+    finishTaskProgress(false);
     console.error(e);
     waiting.remove();
     const msg='Erro da IA: '+e.message;
@@ -759,6 +932,38 @@ function create3DProject(){
   createGodotProject();
 }
 
+async function importGodotZip(file){
+  if(!file) return;
+  try{
+    status('📥 Importando projeto Godot…');
+    const {unzipSync,strFromU8}=await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js');
+    const data=new Uint8Array(await file.arrayBuffer());
+    const entries=unzipSync(data);
+    const newFiles={},newAssets={};
+    const textExt=/\.(godot|gd|tscn|tres|gdshader|txt|md|json|cfg|ini|csv|xml|yml|yaml|shader)$/i;
+    const imageExt=/\.(png|jpg|jpeg|webp|gif)$/i;
+    for(const [rawName,bytes] of Object.entries(entries)){
+      const name=rawName.replace(/^\.\//,'').replace(/\\/g,'/');
+      if(!name||name.endsWith('/')) continue;
+      if(textExt.test(name)){
+        newFiles[name]=strFromU8(bytes);
+      }else if(imageExt.test(name)&&bytes.length<8*1024*1024){
+        const ext=name.split('.').pop().toLowerCase();
+        const mime=ext==='jpg'||ext==='jpeg'?'image/jpeg':ext==='webp'?'image/webp':ext==='gif'?'image/gif':'image/png';
+        let binary=''; for(let i=0;i<bytes.length;i++) binary+=String.fromCharCode(bytes[i]);
+        newAssets[name.replace(/^assets\//,'')]='data:'+mime+';base64,'+btoa(binary);
+      }
+    }
+    if(!newFiles['project.godot']) throw new Error('ZIP não contém project.godot.');
+    createCheckpoint('Antes de importar ZIP');
+    files=newFiles; assets=newAssets; projectMemory=[]; saveProjectMemory();
+    active=Object.keys(files).find(n=>n.endsWith('.gd'))||'project.godot';
+    save(); saveAssets(); $('#editor').value=files[active]||''; tabs(); renderFileTree(); renderAssets(); lines(); run();
+    createCheckpoint('Projeto importado');
+    status('✅ Godot importado: '+Object.keys(files).length+' arquivo(s)');
+  }catch(e){ status('⚠️ Falha ao importar ZIP: '+e.message); }
+}
+
 async function exportGodotZip(){
   if(!isGodotProject()){
     status('⚠️ Este projeto não é Godot.');
@@ -835,6 +1040,12 @@ window.onmessage=e=>{
 };
 
 $('#send').onclick=send;
+if($('#undoAI')) $('#undoAI').onclick=undoAI;
+if($('#redoAI')) $('#redoAI').onclick=redoAI;
+if($('#newFile')) $('#newFile').onclick=createFileManual;
+if($('#fileSearch')) $('#fileSearch').oninput=e=>renderFileTree(e.target.value);
+if($('#importGodot')) $('#importGodot').onclick=()=>$('#zipInput')?.click();
+if($('#zipInput')) $('#zipInput').onchange=e=>{importGodotZip(e.target.files?.[0]);e.target.value='';};
 if($('#attachBtn')) $('#attachBtn').onclick=openAttachmentPicker;
 if($('#attachmentInput')) $('#attachmentInput').onchange=e=>{addAttachmentFiles(e.target.files);e.target.value='';};
 const composer=$('.composer');
@@ -860,7 +1071,9 @@ $('#editor').value=files[active];
 renderChatList();
 renderMessages();
 renderAssets();
+ensureInitialCheckpoint();
 tabs();
+renderFileTree();
 lines();
 run();
 status('☁️ CodeZero • Railway');
