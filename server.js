@@ -25,7 +25,7 @@ let ACTIVE_CHAT_MODEL=FREE_GATEWAY_MODEL;
 let ACTIVE_CODE_MODEL=FREE_GATEWAY_MODEL;
 const AUTH_SESSIONS=new Map();
 const AUTH_TTL_MS=30*24*60*60*1000;
-const DATABASE_URL=process.env.DATABASE_URL||'';
+const DATABASE_URL=String(process.env.DATABASE_URL||process.env.DATABASE_PRIVATE_URL||process.env.POSTGRES_URL||'').trim();
 const AUTH_FALLBACK_FILE=path.join(ROOT,'.codezero-auth.json');
 let AUTH_DB=null;
 let AUTH_STORAGE_MODE='local-ephemeral';
@@ -62,23 +62,47 @@ function saveFallbackStore(data){
 }
 async function initAuthStorage(){
   if(!DATABASE_URL){
+    AUTH_DB=null;
     AUTH_STORAGE_MODE='local-ephemeral';
+    console.warn('[auth-storage] DATABASE_URL ausente ou vazia; usando fallback local.');
     return;
   }
-  AUTH_DB=new Pool({connectionString:DATABASE_URL,ssl:{rejectUnauthorized:false},max:4});
-  await AUTH_DB.query(`CREATE TABLE IF NOT EXISTS cz_users(
-    id TEXT PRIMARY KEY,
-    username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    password_salt TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )`);
-  await AUTH_DB.query(`CREATE TABLE IF NOT EXISTS cz_workspace(
-    user_id TEXT PRIMARY KEY REFERENCES cz_users(id) ON DELETE CASCADE,
-    state JSONB NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-  )`);
-  AUTH_STORAGE_MODE='postgres';
+  if(!/^postgres(?:ql)?:\/\//i.test(DATABASE_URL)){
+    AUTH_DB=null;
+    AUTH_STORAGE_MODE='local-ephemeral';
+    console.warn('[auth-storage] DATABASE_URL existe, mas não parece uma URL PostgreSQL válida; usando fallback local.');
+    return;
+  }
+  try{
+    const isRailwayPrivate=/\.railway\.internal(?::\d+)?\//i.test(DATABASE_URL);
+    AUTH_DB=new Pool({
+      connectionString:DATABASE_URL,
+      ssl:isRailwayPrivate?false:{rejectUnauthorized:false},
+      max:4,
+      connectionTimeoutMillis:10000,
+      idleTimeoutMillis:30000
+    });
+    await AUTH_DB.query('SELECT 1');
+    await AUTH_DB.query(`CREATE TABLE IF NOT EXISTS cz_users(
+      id TEXT PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      password_salt TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await AUTH_DB.query(`CREATE TABLE IF NOT EXISTS cz_workspace(
+      user_id TEXT PRIMARY KEY REFERENCES cz_users(id) ON DELETE CASCADE,
+      state JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    AUTH_STORAGE_MODE='postgres';
+    console.log('[auth-storage] PostgreSQL conectado e tabelas prontas.');
+  }catch(err){
+    console.error('[auth-storage] Falha ao conectar PostgreSQL:',String(err?.message||err));
+    try{await AUTH_DB?.end();}catch{}
+    AUTH_DB=null;
+    AUTH_STORAGE_MODE='local-ephemeral';
+  }
 }
 async function authFindUser(username){
   if(AUTH_DB){
@@ -1364,7 +1388,7 @@ const server=http.createServer(async(req,res)=>{
 
   if(pathnameSearch==='/pollen/status'&&req.method==='GET'){
     const {sess}=pollenSessionKey(req,res);
-    return sendJson(res,200,{ok:true,connected:Boolean(sess?.pollen?.accessToken),serverKey:Boolean(POLLINATIONS_KEY),appKeyConfigured:Boolean(POLLINATIONS_APP_KEY),user:sess?.pollen?.user||null});
+    return sendJson(res,200,{ok:true,csrf:sess?.csrf||'',connected:Boolean(sess?.pollen?.accessToken),serverKey:Boolean(POLLINATIONS_KEY),appKeyConfigured:Boolean(POLLINATIONS_APP_KEY),user:sess?.pollen?.user||null});
   }
   if(pathnameSearch==='/pollen/models'&&req.method==='GET'){
     try{
