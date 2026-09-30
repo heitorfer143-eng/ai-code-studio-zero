@@ -204,7 +204,10 @@ function commonHeaders(type='application/json; charset=utf-8'){
     'Cache-Control':'no-store, no-cache, must-revalidate, max-age=0',
     'X-Content-Type-Options':'nosniff',
     'Referrer-Policy':'no-referrer',
-    'Cross-Origin-Resource-Policy':'same-origin'
+    'Cross-Origin-Resource-Policy':'same-origin',
+    'X-Frame-Options':'DENY',
+    'Permissions-Policy':'camera=(), microphone=(), geolocation=(), payment=()',
+    'Cross-Origin-Opener-Policy':'same-origin'
   };
 }
 function parseDataImage(dataUrl){
@@ -932,6 +935,186 @@ const server=http.createServer(async(req,res)=>{
     });
     return res.end();
   }
+  if(pathnameSearch==='/devops/session'&&req.method==='GET'){
+    const sess=getDevopsSession(req,res,true);
+    return sendJson(res,200,{ok:true,...devopsPublicState(sess)});
+  }
+
+  if(pathnameSearch==='/devops/github/connect'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,true);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,200000);
+      const token=String(body.token||'').trim();
+      if(token.length<20||token.length>300) return sendJson(res,400,{error:'Token GitHub inválido'});
+      const temp={...sess,github:{token}};
+      const user=await ghFetch(temp,'/user');
+      sess.github={token,login:user.login,name:user.name||'',avatar:user.avatar_url||''};
+      return sendJson(res,200,{ok:true,github:{connected:true,login:user.login,name:user.name||'',avatar:user.avatar_url||''}});
+    }catch(e){return sendJson(res,401,{error:'Falha ao conectar GitHub',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/github/disconnect'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,false);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    if(sess) sess.github=null;
+    return sendJson(res,200,{ok:true});
+  }
+  if(pathnameSearch==='/devops/github/repos'&&req.method==='GET'){
+    const sess=getDevopsSession(req,res,false);
+    try{
+      const data=await ghFetch(sess,'/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member');
+      return sendJson(res,200,{ok:true,repos:(data||[]).map(r=>({fullName:r.full_name,name:r.name,private:r.private,defaultBranch:r.default_branch,updatedAt:r.updated_at}))});
+    }catch(e){return sendJson(res,401,{error:'GitHub indisponível',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/github/branches'&&req.method==='GET'){
+    const sess=getDevopsSession(req,res,false);
+    try{
+      const u=new URL(req.url,'http://localhost');
+      const fullName=String(u.searchParams.get('repo')||'');
+      if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)) return sendJson(res,400,{error:'Repositório inválido'});
+      const data=await ghFetch(sess,'/repos/'+fullName+'/branches?per_page=100');
+      return sendJson(res,200,{ok:true,branches:(data||[]).map(b=>({name:b.name,sha:b.commit?.sha||''}))});
+    }catch(e){return sendJson(res,400,{error:'Falha ao listar branches',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/github/import'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,false);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,300000);
+      const result=await githubImportRepo(sess,String(body.fullName||''),String(body.branch||''));
+      return sendJson(res,200,{ok:true,...result});
+    }catch(e){return sendJson(res,400,{error:'Falha ao importar repositório',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/github/commit'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,false);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,8*1024*1024);
+      const result=await githubCommitSnapshot(sess,{
+        fullName:String(body.fullName||''),
+        branch:String(body.branch||'main'),
+        message:String(body.message||'CodeZero update'),
+        files:body.files&&typeof body.files==='object'?body.files:{},
+        assets:body.assets&&typeof body.assets==='object'?body.assets:{}
+      });
+      return sendJson(res,200,{ok:true,...result});
+    }catch(e){return sendJson(res,400,{error:'Falha no commit/push',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/github/branch'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,false);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,200000);
+      const fullName=String(body.fullName||''),name=String(body.name||'').trim(),from=String(body.from||'main').trim();
+      if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)||!/^[A-Za-z0-9._\/-]{1,120}$/.test(name)) return sendJson(res,400,{error:'Branch inválida'});
+      const base=await ghFetch(sess,'/repos/'+fullName+'/git/ref/heads/'+encodeURIComponent(from));
+      const created=await ghFetch(sess,'/repos/'+fullName+'/git/refs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref:'refs/heads/'+name,sha:base.object.sha})});
+      return sendJson(res,200,{ok:true,name,sha:created.object?.sha||base.object.sha});
+    }catch(e){return sendJson(res,400,{error:'Falha ao criar branch',details:String(e?.message||e)});}
+  }
+
+  if(pathnameSearch==='/devops/railway/connect'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,true);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,200000);
+      const token=String(body.token||'').trim(),type=body.type==='project'?'project':'account';
+      if(token.length<20||token.length>500) return sendJson(res,400,{error:'Token Railway inválido'});
+      const temp={...sess,railway:{token,type}};
+      let identity='';
+      if(type==='project'){
+        const d=await railwayGraphql(temp,'query { projectToken { projectId environmentId } }');
+        identity='Projeto '+d.projectToken.projectId;
+      }else{
+        const d=await railwayGraphql(temp,'query { me { id name email } }');
+        identity=d.me?.name||d.me?.email||d.me?.id||'Railway';
+      }
+      sess.railway={token,type,identity};
+      return sendJson(res,200,{ok:true,railway:{connected:true,type,identity}});
+    }catch(e){return sendJson(res,401,{error:'Falha ao conectar Railway',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/railway/disconnect'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,false);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    if(sess) sess.railway=null;
+    return sendJson(res,200,{ok:true});
+  }
+  if(pathnameSearch==='/devops/railway/projects'&&req.method==='GET'){
+    const sess=getDevopsSession(req,res,false);
+    try{
+      if(sess?.railway?.type==='project'){
+        const t=await railwayGraphql(sess,'query { projectToken { projectId environmentId } }');
+        const id=t.projectToken.projectId;
+        const d=await railwayGraphql(sess,'query project($id:String!){ project(id:$id){ id name services { edges { node { id name } } } environments { edges { node { id name } } } } }',{id});
+        return sendJson(res,200,{ok:true,projects:[d.project]});
+      }
+      const d=await railwayGraphql(sess,'query { projects { edges { node { id name } } } }');
+      return sendJson(res,200,{ok:true,projects:(d.projects?.edges||[]).map(x=>x.node)});
+    }catch(e){return sendJson(res,400,{error:'Falha ao listar projetos Railway',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/railway/project'&&req.method==='GET'){
+    const sess=getDevopsSession(req,res,false);
+    try{
+      const u=new URL(req.url,'http://localhost');
+      const id=String(u.searchParams.get('id')||'');
+      const d=await railwayGraphql(sess,'query project($id:String!){ project(id:$id){ id name services { edges { node { id name } } } environments { edges { node { id name } } } } }',{id});
+      return sendJson(res,200,{ok:true,project:{id:d.project.id,name:d.project.name,services:(d.project.services?.edges||[]).map(x=>x.node),environments:(d.project.environments?.edges||[]).map(x=>x.node)}});
+    }catch(e){return sendJson(res,400,{error:'Falha ao abrir projeto Railway',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/railway/deploy'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,false);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,200000);
+      const serviceId=String(body.serviceId||''),environmentId=String(body.environmentId||''),commitSha=String(body.commitSha||'').trim();
+      const q=commitSha
+        ? 'mutation deploy($serviceId:String!,$environmentId:String!,$commitSha:String!){ serviceInstanceDeployV2(serviceId:$serviceId,environmentId:$environmentId,commitSha:$commitSha) }'
+        : 'mutation deploy($serviceId:String!,$environmentId:String!){ serviceInstanceDeployV2(serviceId:$serviceId,environmentId:$environmentId) }';
+      const vars=commitSha?{serviceId,environmentId,commitSha}:{serviceId,environmentId};
+      const d=await railwayGraphql(sess,q,vars);
+      return sendJson(res,200,{ok:true,deploymentId:d.serviceInstanceDeployV2||''});
+    }catch(e){return sendJson(res,400,{error:'Falha ao iniciar deploy',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/railway/deployments'&&req.method==='GET'){
+    const sess=getDevopsSession(req,res,false);
+    try{
+      const u=new URL(req.url,'http://localhost');
+      const projectId=String(u.searchParams.get('projectId')||''),serviceId=String(u.searchParams.get('serviceId')||'');
+      const d=await railwayGraphql(sess,'query deployments($input:DeploymentListInput!){ deployments(input:$input,first:10){ edges { node { id status createdAt } } } }',{input:{projectId,serviceId}});
+      return sendJson(res,200,{ok:true,deployments:(d.deployments?.edges||[]).map(x=>x.node)});
+    }catch(e){return sendJson(res,400,{error:'Falha ao listar deploys',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/railway/logs'&&req.method==='GET'){
+    const sess=getDevopsSession(req,res,false);
+    try{
+      const u=new URL(req.url,'http://localhost');
+      const deploymentId=String(u.searchParams.get('deploymentId')||'');
+      const d=await railwayGraphql(sess,'query logs($deploymentId:String!,$limit:Int){ deploymentLogs(deploymentId:$deploymentId,limit:$limit){ timestamp message severity } }',{deploymentId,limit:200});
+      return sendJson(res,200,{ok:true,logs:d.deploymentLogs||[]});
+    }catch(e){return sendJson(res,400,{error:'Falha ao obter logs',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/railway/connect-repo'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,false);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,200000);
+      const d=await railwayGraphql(sess,'mutation connect($id:String!,$input:ServiceConnectInput!){ serviceConnect(id:$id,input:$input){ id } }',{id:String(body.serviceId||''),input:{repo:String(body.repo||''),branch:String(body.branch||'main')}});
+      return sendJson(res,200,{ok:true,serviceId:d.serviceConnect?.id||body.serviceId});
+    }catch(e){return sendJson(res,400,{error:'Falha ao conectar serviço ao repositório',details:String(e?.message||e)});}
+  }
+  if(pathnameSearch==='/devops/railway/variables'&&req.method==='POST'){
+    const sess=getDevopsSession(req,res,false);
+    if(!requireDevopsWrite(req,res,sess)) return;
+    try{
+      const body=await readJson(req,300000);
+      const clean={};
+      for(const [k,v] of Object.entries(body.variables||{})) if(/^[A-Z_][A-Z0-9_]{0,127}$/.test(k)) clean[k]=String(v).slice(0,10000);
+      if(!Object.keys(clean).length) return sendJson(res,400,{error:'Nenhuma variável válida'});
+      await railwayGraphql(sess,'mutation vars($input:VariableCollectionUpsertInput!){ variableCollectionUpsert(input:$input) }',{input:{projectId:String(body.projectId||''),environmentId:String(body.environmentId||''),serviceId:String(body.serviceId||''),variables:clean}});
+      return sendJson(res,200,{ok:true,updated:Object.keys(clean)});
+    }catch(e){return sendJson(res,400,{error:'Falha ao atualizar variáveis',details:String(e?.message||e)});}
+  }
+
   if(pathnameSearch==='/image/edit'&&req.method==='POST'){
     try{
       const body=await readJson(req,12*1024*1024);
