@@ -335,6 +335,68 @@ function validateGeneratedFiles(files){
   return errors;
 }
 
+function parseProjectSnapshot(project){
+  const out={};
+  const text=String(project||'');
+  const re=/^ARQUIVO\s+([^:]+):\n/gm;
+  const matches=[...text.matchAll(re)];
+  for(let i=0;i<matches.length;i++){
+    const name=matches[i][1].trim();
+    const start=matches[i].index+matches[i][0].length;
+    const end=i+1<matches.length?matches[i+1].index:text.length;
+    out[name]=text.slice(start,end).replace(/\n\n$/,'').trimEnd();
+  }
+  return out;
+}
+
+function buildProjectMap(project){
+  const files=parseProjectSnapshot(project);
+  const names=Object.keys(files);
+  const scenes=[];
+  const scripts=[];
+  const resources=[];
+  const refs=[];
+  for(const [name,content] of Object.entries(files)){
+    if(name.endsWith('.tscn')) scenes.push(name);
+    if(name.endsWith('.gd')) scripts.push(name);
+    if(name.endsWith('.tres')||name.endsWith('.gdshader')) resources.push(name);
+    for(const m of String(content).matchAll(/res:\/\/([^"')\s]+)/g)){
+      refs.push({from:name,to:m[1]});
+    }
+  }
+  const mainScene=/run\/main_scene="res:\/\/([^"]+)"/.exec(files['project.godot']||'')?.[1]||'';
+  return {files:names,scenes,scripts,resources,refs,mainScene};
+}
+
+function validateProjectReferences(generatedFiles,project){
+  const original=parseProjectSnapshot(project);
+  const combined={...original,...generatedFiles};
+  const names=new Set(Object.keys(combined));
+  const errors=[];
+  for(const [name,content] of Object.entries(generatedFiles)){
+    for(const m of String(content).matchAll(/res:\/\/([^"')\s]+)/g)){
+      const target=m[1];
+      if(!names.has(target) && !target.endsWith('.import')) errors.push(name+': referência ausente res://'+target);
+    }
+  }
+  const pg=generatedFiles['project.godot']||original['project.godot']||'';
+  const main=/run\/main_scene="res:\/\/([^"]+)"/.exec(pg)?.[1]||'';
+  if(main&&!names.has(main)) errors.push('project.godot: main_scene aponta para arquivo inexistente res://'+main);
+  return errors;
+}
+
+function taskComplexity(message,project){
+  const m=String(message||'').toLowerCase();
+  const files=projectFileNames(project).length;
+  let score=0;
+  if(files>=6) score++;
+  if(files>=12) score++;
+  if(/\b(multiplayer|servidor|save|salvamento|inventário|inventario|combate|boss|procedural|geração|geracao|navigation|shader|state machine|máquina de estados|maquina de estados|sistema completo|projeto completo)\b/i.test(m)) score+=2;
+  if(/\b(3d|godot|gdscript|tscn|física|fisica|colisão|colisao|animação|animacao)\b/i.test(m)) score++;
+  if(String(message||'').length>450) score++;
+  return score>=4?'high':score>=2?'medium':'low';
+}
+
 function projectFileNames(project){
   return [...String(project||'').matchAll(/^ARQUIVO\s+([^:]+):/gm)].map(m=>m[1].trim());
 }
