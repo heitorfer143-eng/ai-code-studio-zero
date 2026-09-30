@@ -26,9 +26,169 @@ let devopsState={github:{connected:false},railway:{connected:false}};
 let authState={authenticated:false,username:'',csrf:'',persistent:false,storage:'local-ephemeral'};
 let cloudSaveTimer=null;
 let cloudSaving=false;
+let pollenState={connected:false,serverKey:false,appKeyConfigured:false,user:null};
+let mediaModels=[];
+let selectedImageModel=localStorage.getItem('zero.media.model')||'';
 let chats=loadChats();
 let activeChatId=localStorage.getItem(ACTIVE_CHAT_KEY)||chats[0].id;
 if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
+
+async function pollenFetch(url,options={}){
+  const opts={credentials:'same-origin',...options,headers:{...(options.headers||{})}};
+  if((opts.method||'GET').toUpperCase()!=='GET'){
+    opts.headers['Content-Type']=opts.headers['Content-Type']||'application/json';
+    if(devopsCsrf) opts.headers['X-CSRF-Token']=devopsCsrf;
+  }
+  const r=await fetch(url,opts);
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(data?.details||data?.error||('HTTP '+r.status));
+  return data;
+}
+function showMediaResult(text,error=false){
+  const el=$('#mediaResult'); if(!el) return;
+  el.textContent=String(text||''); el.classList.toggle('error',!!error);
+}
+function renderPollenState(){
+  const el=$('#pollenState');
+  if(!el) return;
+  if(pollenState.connected) el.textContent='🟢 Conectado'+(pollenState.user?.name?' como '+pollenState.user.name:'');
+  else if(pollenState.serverKey) el.textContent='🟢 Chave do servidor ativa';
+  else el.textContent='⚪ Não conectado';
+}
+function mediaModelLabel(m){
+  const edit=(m.supportedEndpoints||[]).includes('/v1/images/edits')||(m.inputModalities||[]).includes('image');
+  const health=m.health?.status==='healthy'?'🟢':'';
+  return (health?health+' ':'')+(m.title||m.id)+(edit?' ✏️':'');
+}
+function filteredMediaModels(){
+  const q=String($('#mediaModelSearch')?.value||'').trim().toLowerCase();
+  return mediaModels.filter(m=>!q||m.id.toLowerCase().includes(q)||String(m.title||'').toLowerCase().includes(q)||String(m.publisher||'').toLowerCase().includes(q));
+}
+function renderMediaModels(){
+  const sel=$('#mediaModel'); if(!sel) return;
+  const list=filteredMediaModels();
+  sel.innerHTML='';
+  for(const m of list){
+    const o=document.createElement('option'); o.value=m.id; o.textContent=mediaModelLabel(m); sel.append(o);
+  }
+  if(selectedImageModel&&list.some(m=>m.id===selectedImageModel)) sel.value=selectedImageModel;
+  else if(list.length){selectedImageModel=list[0].id; sel.value=selectedImageModel;}
+  renderMediaModelInfo();
+}
+function renderMediaModelInfo(){
+  const id=$('#mediaModel')?.value||selectedImageModel;
+  const m=mediaModels.find(x=>x.id===id);
+  const el=$('#mediaModelInfo'); if(!el||!m) return;
+  selectedImageModel=m.id; localStorage.setItem('zero.media.model',m.id);
+  const edit=(m.supportedEndpoints||[]).includes('/v1/images/edits')||(m.inputModalities||[]).includes('image');
+  const price=m.pricing&&Object.keys(m.pricing).length?JSON.stringify(m.pricing):'preço não informado';
+  el.textContent=(m.publisher?m.publisher+' • ':'')+(edit?'gera + edita':'gera imagem')+' • '+price;
+}
+function renderMediaSources(){
+  const sel=$('#mediaSource'); if(!sel) return;
+  const old=sel.value; sel.innerHTML='<option value="">Escolha um asset...</option>';
+  for(const name of Object.keys(assets)){
+    const o=document.createElement('option');o.value=name;o.textContent=name;sel.append(o);
+  }
+  if(old&&assets[old]) sel.value=old;
+}
+async function loadMediaModels(){
+  try{
+    const data=await pollenFetch('/pollen/models');
+    mediaModels=Array.isArray(data.models)?data.models:[];
+    renderMediaModels();
+    showMediaResult(mediaModels.length+' modelo(s) de imagem carregado(s).');
+  }catch(e){showMediaResult(e.message,true);}
+}
+async function initPollen(){
+  try{
+    const data=await pollenFetch('/pollen/status');
+    pollenState=data; renderPollenState();
+  }catch(e){console.warn('pollen status',e);}
+}
+function openMediaStudio(){
+  $('#mediaModal')?.classList.remove('hidden');
+  renderPollenState(); renderMediaSources();
+  if(!mediaModels.length) loadMediaModels();
+}
+function closeMediaStudio(){$('#mediaModal')?.classList.add('hidden');}
+async function connectPollenDevice(){
+  try{
+    const data=await pollenFetch('/pollen/device/start',{method:'POST',body:'{}'});
+    $('#pollenDevice')?.classList.remove('hidden');
+    if($('#pollenCode')) $('#pollenCode').textContent=data.userCode||'';
+    if($('#pollenVerifyLink')) $('#pollenVerifyLink').href=data.verificationUri||'https://enter.pollinations.ai/device';
+    showMediaResult('Abra o link, autorize e depois clique em “Já autorizei”.');
+  }catch(e){showMediaResult(e.message,true);}
+}
+async function pollPollenDevice(){
+  try{
+    const data=await pollenFetch('/pollen/device/poll',{method:'POST',body:'{}'});
+    if(data.pending){showMediaResult('Ainda aguardando autorização...');return;}
+    pollenState.connected=true;pollenState.user=data.user||null;renderPollenState();
+    $('#pollenDevice')?.classList.add('hidden');
+    showMediaResult('🌼 Pollinations conectado.');
+  }catch(e){showMediaResult(e.message,true);}
+}
+async function connectPollenKey(){
+  const key=prompt('Cole sua chave Pollinations sk_.\nEla ficará somente na sessão segura do backend e NÃO será salva no navegador.');
+  if(!key) return;
+  try{
+    const data=await pollenFetch('/pollen/connect-key',{method:'POST',body:JSON.stringify({key})});
+    pollenState.connected=true;pollenState.user=data.user||null;renderPollenState();
+    showMediaResult('🔑 Chave conectada à sessão com segurança.');
+  }catch(e){showMediaResult(e.message,true);}
+}
+async function disconnectPollen(){
+  try{
+    await pollenFetch('/pollen/disconnect',{method:'POST',body:'{}'});
+    pollenState.connected=false;pollenState.user=null;renderPollenState();
+    showMediaResult('Pollinations desconectado.');
+  }catch(e){showMediaResult(e.message,true);}
+}
+function bestEditModel(){
+  const current=mediaModels.find(m=>m.id===selectedImageModel);
+  const supports=m=>(m.supportedEndpoints||[]).includes('/v1/images/edits')||(m.inputModalities||[]).includes('image');
+  if(current&&supports(current)) return current.id;
+  return mediaModels.find(m=>supports(m)&&m.health?.status==='healthy')?.id
+    || mediaModels.find(supports)?.id
+    || selectedImageModel
+    || 'black-forest-labs/flux.1-kontext-pro';
+}
+async function mediaGenerate(){
+  const promptText=String($('#mediaPrompt')?.value||'').trim();
+  const name=String($('#mediaName')?.value||'generated-image.png').trim();
+  const size=String($('#mediaSize')?.value||'1024x1024');
+  const model=$('#mediaModel')?.value||selectedImageModel;
+  if(!promptText) return showMediaResult('Digite um prompt.',true);
+  try{
+    showMediaResult('Gerando com '+model+'...');
+    const data=await pollenFetch('/pollen/generate',{method:'POST',body:JSON.stringify({prompt:promptText,model,size})});
+    const final=data.url||data.dataUrl;
+    if(!final) throw new Error('Imagem não retornada');
+    const clean=String(name||'generated-image.png').replace(/^assets\//,'').replace(/[^\w.\-]/g,'-');
+    assets[clean]=final;saveAssets();renderAssets();renderMediaSources();
+    showMediaResult('✅ Criada: assets/'+clean);
+    status('🖼️ Imagem criada: assets/'+clean);
+  }catch(e){showMediaResult(e.message,true);}
+}
+async function mediaEdit(){
+  const source=$('#mediaSource')?.value;
+  const promptText=String($('#mediaEditPrompt')?.value||'').trim();
+  const target=String($('#mediaEditName')?.value||'edited-image.png').trim();
+  if(!source||!assets[source]) return showMediaResult('Escolha um asset.',true);
+  if(!promptText) return showMediaResult('Digite a instrução de edição.',true);
+  try{
+    const previous=selectedImageModel;
+    selectedImageModel=bestEditModel();
+    showMediaResult('Editando com '+selectedImageModel+'...');
+    const out=await editImageAsset(source,target,promptText,selectedImageModel);
+    selectedImageModel=previous||selectedImageModel;
+    renderMediaSources();
+    showMediaResult('✅ Editada: assets/'+out.name);
+    status('🛠️ Imagem editada: assets/'+out.name);
+  }catch(e){showMediaResult(e.message,true);}
+}
 
 function workspaceState(){
   if(files[active]!=null) files[active]=$('#editor').value;
@@ -627,16 +787,16 @@ function resetProject(){
   run();
   status('↻ Projeto resetado');
 }
-async function generateImageAsset(name,prompt){
+async function generateImageAsset(name,prompt,model=selectedImageModel){
+  if(!mediaModels.length){try{await loadMediaModels();}catch{}}
+  const chosen=model||selectedImageModel||mediaModels[0]?.id||'black-forest-labs/flux.1-schnell';
   const cleanName=String(name||'imagem.png').trim().replace(/^assets\//,'').replace(/[^\w.\-]/g,'-')||'imagem.png';
-  const q=new URLSearchParams({prompt:String(prompt||'').trim()});
-  const r=await fetch('/image?'+q.toString());
-  const data=await r.json();
-  if(!r.ok||!data?.url) throw new Error(data?.details||data?.error||'Falha ao gerar imagem');
-  assets[cleanName]=data.url;
-  saveAssets();
-  renderAssets();
-  return {name:cleanName,url:data.url};
+  const data=await pollenFetch('/pollen/generate',{method:'POST',body:JSON.stringify({prompt:String(prompt||'').trim(),model:chosen,size:'1024x1024'})});
+  const final=data.url||data.dataUrl;
+  if(!final) throw new Error('Falha ao gerar imagem');
+  assets[cleanName]=final;
+  saveAssets();renderAssets();renderMediaSources();
+  return {name:cleanName,url:final,model:chosen};
 }
 async function manualImage(){
   const promptText=prompt('Descreva a imagem que o CodeZero deve criar:');
@@ -702,6 +862,7 @@ function renderAssets(){
     card.oncontextmenu=e=>{e.preventDefault();navigator.clipboard?.writeText('assets/'+name);status('📋 Copiado: assets/'+name);};
     root.append(card);
   }
+  renderMediaSources();
 }
 
 async function importLocalImage(file){
@@ -734,25 +895,22 @@ async function manualUploadImage(){
   input.click();
 }
 
-async function editImageAsset(sourceName,targetName,promptText){
+async function editImageAsset(sourceName,targetName,promptText,model=''){
   const source=assets[sourceName];
   if(!source) throw new Error('Asset não encontrado: '+sourceName);
-  const payload={filename:sourceName,prompt:promptText,model:'kontext',size:'1024x1024'};
+  if(!mediaModels.length){try{await loadMediaModels();}catch{}}
+  const chosen=model||bestEditModel();
+  const payload={filename:sourceName,prompt:promptText,model:chosen,size:'1024x1024'};
   if(String(source).startsWith('data:image/')) payload.dataUrl=source;
   else payload.sourceUrl=source;
-  const r=await fetch('/image/edit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
-  const data=await r.json();
-  if(!r.ok) throw new Error(data?.details||data?.error||'Falha ao editar imagem.');
-  let finalUrl=data.url||'';
-  if(!finalUrl&&data.dataUrl) finalUrl=data.dataUrl;
+  const data=await pollenFetch('/image/edit',{method:'POST',body:JSON.stringify(payload)});
+  const finalUrl=data.url||data.dataUrl||'';
   if(!finalUrl) throw new Error('Edição não retornou imagem.');
   const cleanTarget=String(targetName||'edited-image.png').replace(/^assets\//,'').replace(/[^\w.\-]/g,'-');
   assets[cleanTarget]=finalUrl;
-  saveAssets();
-  renderAssets();
-  return {name:cleanTarget,url:finalUrl};
+  saveAssets();renderAssets();renderMediaSources();
+  return {name:cleanTarget,url:finalUrl,model:chosen};
 }
-
 async function manualEditImage(preselected=''){
   const names=Object.keys(assets);
   if(!names.length){status('⚠️ Adicione ou gere uma imagem primeiro.');return;}
@@ -1395,6 +1553,17 @@ window.onmessage=e=>{
 };
 
 $('#send').onclick=send;
+if($('#mediaStudioBtn')) $('#mediaStudioBtn').onclick=openMediaStudio;
+if($('#mediaClose')) $('#mediaClose').onclick=closeMediaStudio;
+if($('#pollenConnect')) $('#pollenConnect').onclick=connectPollenDevice;
+if($('#pollenKey')) $('#pollenKey').onclick=connectPollenKey;
+if($('#pollenDisconnect')) $('#pollenDisconnect').onclick=disconnectPollen;
+if($('#pollenRefresh')) $('#pollenRefresh').onclick=loadMediaModels;
+if($('#pollenPoll')) $('#pollenPoll').onclick=pollPollenDevice;
+if($('#mediaModelSearch')) $('#mediaModelSearch').oninput=renderMediaModels;
+if($('#mediaModel')) $('#mediaModel').onchange=renderMediaModelInfo;
+if($('#mediaGenerate')) $('#mediaGenerate').onclick=mediaGenerate;
+if($('#mediaEdit')) $('#mediaEdit').onclick=mediaEdit;
 if($('#accountBtn')) $('#accountBtn').onclick=openAccount;
 if($('#accountClose')) $('#accountClose').onclick=closeAccount;
 if($('#accountRegister')) $('#accountRegister').onclick=registerAccount;
@@ -1458,3 +1627,4 @@ run();
 status('☁️ CodeZero • Railway');
 initDevops();
 initAccount();
+initPollen();
