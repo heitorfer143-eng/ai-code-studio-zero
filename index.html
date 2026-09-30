@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <title>CodeZero AI Code Studio V13.0</title>
-  <link rel="stylesheet" href="style.css?v=13.0.0">
+  <title>CodeZero AI Code Studio V14.0</title>
+  <link rel="stylesheet" href="style.css?v=14.0.0">
 </head>
 <body>
   <header>
     <button id="chatToggle" class="ghost">☰ Chats</button>
-    <b>⚡ CodeZero <small>V13.0</small></b>
+    <b>⚡ CodeZero <small>V14.0</small></b>
     <span id="status">☁️ Railway</span><span id="cloudSaveStatus">Local</span><button id="accountBtn">👤 Conta</button><button id="devopsBtn">☁️ DevOps</button>
     <button id="theme">☀/☾</button>
-    <button id="importGodot">📥 Importar ZIP</button><input id="zipInput" type="file" hidden accept=".zip,application/zip"><button id="undoAI" title="Desfazer alteração da IA">↶</button><button id="redoAI" title="Refazer alteração da IA">↷</button><button id="uploadImage">📤 Asset</button><button id="new3D">🎮 Novo Godot</button><button id="exportGodot">📦 Baixar Godot ZIP</button><button id="resetProject">↻ Resetar</button><button id="run">▶ Ver projeto</button>
+    <button id="importGodot">📥 Importar ZIP</button><input id="zipInput" type="file" hidden accept=".zip,application/zip"><button id="undoAI" title="Desfazer alteração da IA">↶</button><button id="redoAI" title="Refazer alteração da IA">↷</button><button id="uploadImage">📤 Asset</button><button id="mediaStudioBtn">🎨 Media AI</button><button id="new3D">🎮 Novo Godot</button><button id="exportGodot">📦 Baixar Godot ZIP</button><button id="resetProject">↻ Resetar</button><button id="run">▶ Ver projeto</button>
   </header>
 
   <div class="shell">
@@ -59,7 +59,59 @@
     </main>
   </div>
 
-  <div id="accountModal" class="modal hidden">
+  <div id="mediaModal" class="modal hidden">
+      <div class="modalCard mediaCard">
+        <div class="modalHead"><strong>🎨 CodeZero Media AI</strong><button id="mediaClose">×</button></div>
+        <div class="mediaBody">
+          <div class="mediaConnection">
+            <div><strong>Pollinations</strong><div id="pollenState" class="devopsState">Verificando...</div></div>
+            <div class="mediaConnectActions">
+              <button id="pollenConnect">🌼 Conectar Pollen</button>
+              <button id="pollenKey">🔑 Usar minha chave</button>
+              <button id="pollenDisconnect">Desconectar</button>
+              <button id="pollenRefresh">↻ Modelos</button>
+            </div>
+            <div id="pollenDevice" class="pollenDevice hidden">
+              <div>Abra <a id="pollenVerifyLink" href="https://enter.pollinations.ai/device" target="_blank" rel="noopener">enter.pollinations.ai/device</a></div>
+              <div>Código: <strong id="pollenCode"></strong></div>
+              <button id="pollenPoll">Já autorizei</button>
+            </div>
+          </div>
+          <div class="mediaGrid">
+            <section class="mediaSection">
+              <h3>Modelo</h3>
+              <input id="mediaModelSearch" type="search" placeholder="Buscar GPT Image, Gemini, Flux, Seedream...">
+              <select id="mediaModel"></select>
+              <div id="mediaModelInfo" class="mediaModelInfo"></div>
+            </section>
+            <section class="mediaSection">
+              <h3>Gerar imagem</h3>
+              <textarea id="mediaPrompt" placeholder="Descreva a imagem que quer criar..."></textarea>
+              <div class="mediaRow">
+                <input id="mediaName" value="generated-image.png" placeholder="nome.png">
+                <select id="mediaSize">
+                  <option>1024x1024</option>
+                  <option>1536x1024</option>
+                  <option>1024x1536</option>
+                </select>
+                <button id="mediaGenerate">Gerar</button>
+              </div>
+            </section>
+            <section class="mediaSection">
+              <h3>Editar imagem</h3>
+              <select id="mediaSource"><option value="">Escolha um asset...</option></select>
+              <textarea id="mediaEditPrompt" placeholder="Ex.: remova o fundo, troque o céu, deixe em pixel art..."></textarea>
+              <div class="mediaRow">
+                <input id="mediaEditName" value="edited-image.png" placeholder="nome-editado.png">
+                <button id="mediaEdit">Editar</button>
+              </div>
+            </section>
+          </div>
+          <div id="mediaResult" class="devopsResult"></div>
+        </div>
+      </div>
+    </div>
+    <div id="accountModal" class="modal hidden">
       <div class="modalCard accountCard">
         <div class="modalHead"><strong>👤 Conta CodeZero</strong><button id="accountClose">×</button></div>
         <div class="accountBody">
@@ -135,6 +187,6 @@
       </div>
     </div>
     <div id="drawerShade"></div>
-  <script type="module" src="app.js?v=13.0.0"></script>
+  <script type="module" src="app.js?v=14.0.0"></script>
 </body>
 </html>
