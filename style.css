@@ -92,3 +92,58 @@ body.godot-mode #console{max-height:110px}
   .composer{grid-template-columns:auto 1fr auto}
   #attachBtn{min-width:38px}
 }
+
+/* V11 Agent Workspace */
+.workspace{grid-template-columns:210px 1fr;grid-template-rows:48px 52% 1fr}
+#tabs{grid-column:1 / -1}
+#fileExplorer{grid-column:1;grid-row:2;background:#0a1018;border-right:1px solid var(--line);min-width:0;overflow:auto}
+.explorerHead{display:flex;align-items:center;gap:8px;padding:9px;border-bottom:1px solid var(--line)}
+.explorerHead strong{margin-right:auto}
+.explorerHead button{padding:4px 8px}
+#fileSearch{width:calc(100% - 14px);margin:7px;padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--text)}
+#fileTree{padding:4px}
+.treeFile{width:100%;display:block;text-align:left;border:0;background:transparent;padding:7px 8px;border-radius:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.treeFile:hover{background:#ffffff0a}
+.treeFile.active{background:#142038;color:white}
+.treeFile.changed{color:#78e0aa}
+.treeEmpty{padding:12px;color:var(--muted);font-size:11px}
+.code{grid-column:2;grid-row:2}
+.output{grid-column:1 / -1;grid-row:3}
+
+.taskProgress{margin:10px 14px 0;padding:10px;border:1px solid var(--line);border-radius:11px;background:var(--panel2)}
+.taskProgress.hidden{display:none}
+.taskProgressTop{display:flex;justify-content:space-between;gap:12px;font-size:12px}
+.taskBar{height:6px;margin:8px 0;background:#05080d;border-radius:999px;overflow:hidden}
+.taskBar i{display:block;height:100%;width:0;background:var(--accent);transition:width .35s ease}
+#taskSteps{display:flex;gap:7px;flex-wrap:wrap;font-size:10px;color:var(--muted)}
+.taskStep.active{color:#8db2ff}
+.taskStep.done{color:#71d7a6}
+
+.modal{position:fixed;z-index:100;inset:0;background:#000a;display:grid;place-items:center;padding:18px}
+.modal.hidden{display:none}
+.modalCard{width:min(1100px,96vw);height:min(780px,92vh);background:var(--panel);border:1px solid var(--line);border-radius:14px;display:grid;grid-template-rows:auto auto 1fr auto;overflow:hidden}
+.modalHead{display:flex;align-items:center;padding:12px;border-bottom:1px solid var(--line)}
+.modalHead strong{margin-right:auto}
+.modalHead button{padding:4px 8px}
+#diffFiles{display:flex;gap:6px;padding:8px;overflow:auto;border-bottom:1px solid var(--line)}
+#diffFiles button.active{border-color:var(--accent)}
+.diffPanels{display:grid;grid-template-columns:1fr 1fr;min-height:0}
+.diffPanels pre{margin:0;padding:12px;overflow:auto;white-space:pre-wrap;font:12px/1.45 monospace;background:#080d14}
+#diffBefore{border-right:1px solid var(--line)}
+.modalActions{display:flex;justify-content:flex-end;gap:8px;padding:10px;border-top:1px solid var(--line)}
+#diffReject{border-color:#8d3945}
+#diffAccept{background:var(--accent);border-color:transparent;color:white}
+
+body.godot-mode .workspace{grid-template-columns:210px 1fr;grid-template-rows:48px 68% 1fr}
+
+@media(max-width:900px){
+  .workspace{grid-template-columns:1fr;grid-template-rows:48px 180px 52vh 38vh}
+  #tabs{grid-column:1;grid-row:1}
+  #fileExplorer{grid-column:1;grid-row:2;border-right:0;border-bottom:1px solid var(--line)}
+  .code{grid-column:1;grid-row:3}
+  .output{grid-column:1;grid-row:4}
+  body.godot-mode .workspace{grid-template-columns:1fr;grid-template-rows:48px 180px 62vh 34vh}
+  .diffPanels{grid-template-columns:1fr}
+  #diffBefore{border-right:0;border-bottom:1px solid var(--line)}
+  .modalCard{height:94vh}
+}
