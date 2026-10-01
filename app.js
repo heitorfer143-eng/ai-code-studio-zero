@@ -1554,36 +1554,157 @@ function create3DProject(){
   createGodotProject();
 }
 
-async function importGodotZip(file){
-  if(!file) return;
-  try{
-    status('📥 Importando projeto Godot…');
-    const {unzipSync,strFromU8}=await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js');
-    const data=new Uint8Array(await file.arrayBuffer());
-    const entries=unzipSync(data);
-    const newFiles={},newAssets={};
-    const textExt=/\.(godot|gd|tscn|tres|gdshader|txt|md|json|cfg|ini|csv|xml|yml|yaml|shader)$/i;
-    const imageExt=/\.(png|jpg|jpeg|webp|gif)$/i;
-    for(const [rawName,bytes] of Object.entries(entries)){
-      const name=rawName.replace(/^\.\//,'').replace(/\\/g,'/');
-      if(!name||name.endsWith('/')) continue;
-      if(textExt.test(name)){
-        newFiles[name]=strFromU8(bytes);
-      }else if(imageExt.test(name)&&bytes.length<8*1024*1024){
-        const ext=name.split('.').pop().toLowerCase();
-        const mime=ext==='jpg'||ext==='jpeg'?'image/jpeg':ext==='webp'?'image/webp':ext==='gif'?'image/gif':'image/png';
-        let binary=''; for(let i=0;i<bytes.length;i++) binary+=String.fromCharCode(bytes[i]);
-        newAssets[name.replace(/^assets\//,'')]='data:'+mime+';base64,'+btoa(binary);
+async function collectImportedProject(fileList){
+  const importedFiles={},importedAssets={};
+  const list=[...(fileList||[])];
+  const textExt=/\.(godot|gd|tscn|tres|gdshader|txt|md|json|cfg|ini|csv|xml|yml|yaml|shader|html|css|js|mjs|cjs|ts|tsx|jsx|py|java|cs|cpp|c|h|hpp|go|rs|php|rb|sh|sql)$/i;
+  const imageExt=/\.(png|jpg|jpeg|webp|gif)$/i;
+  const {unzipSync,strFromU8}=await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js');
+
+  const addBytes=(rawName,bytes)=>{
+    const name=String(rawName||'').replace(/^\.\//,'').replace(/\\/g,'/').replace(/^\/+/,'');
+    if(!name||name.endsWith('/')) return;
+    if(textExt.test(name)&&bytes.length<2*1024*1024){
+      importedFiles[name]=strFromU8(bytes);
+      return;
+    }
+    if(imageExt.test(name)&&bytes.length<8*1024*1024){
+      const ext=name.split('.').pop().toLowerCase();
+      const mime=ext==='jpg'||ext==='jpeg'?'image/jpeg':ext==='webp'?'image/webp':ext==='gif'?'image/gif':'image/png';
+      let binary='';
+      for(let i=0;i<bytes.length;i++) binary+=String.fromCharCode(bytes[i]);
+      importedAssets[name.replace(/^assets\//,'')]='data:'+mime+';base64,'+btoa(binary);
+    }
+  };
+
+  for(const file of list){
+    const name=file.webkitRelativePath||file.name||'arquivo';
+    if(/\.zip$/i.test(name)||file.type==='application/zip'){
+      const data=new Uint8Array(await file.arrayBuffer());
+      const entries=unzipSync(data);
+      for(const [entryName,bytes] of Object.entries(entries)) addBytes(entryName,bytes);
+      continue;
+    }
+    if(textExt.test(name)){
+      if(file.size<=2*1024*1024) importedFiles[name]=await file.text();
+      continue;
+    }
+    if(imageExt.test(name)||String(file.type||'').startsWith('image/')){
+      if(file.size<=8*1024*1024){
+        const dataUrl=await new Promise((resolve,reject)=>{
+          const reader=new FileReader();
+          reader.onload=()=>resolve(String(reader.result||''));
+          reader.onerror=()=>reject(new Error('Falha ao ler '+name));
+          reader.readAsDataURL(file);
+        });
+        importedAssets[name.replace(/^assets\//,'')]=dataUrl;
       }
     }
-    if(!newFiles['project.godot']) throw new Error('ZIP não contém project.godot.');
-    createCheckpoint('Antes de importar ZIP');
-    files=newFiles; assets=newAssets; projectMemory=[]; saveProjectMemory();
-    active=Object.keys(files).find(n=>n.endsWith('.gd'))||'project.godot';
-    save(); saveAssets(); $('#editor').value=files[active]||''; tabs(); renderFileTree(); renderAssets(); lines(); run();
-    createCheckpoint('Projeto importado');
-    status('✅ Godot importado: '+Object.keys(files).length+' arquivo(s)');
-  }catch(e){ status('⚠️ Falha ao importar ZIP: '+e.message); }
+  }
+  return {importedFiles,importedAssets};
+}
+
+function installGodotWorkspace(newFiles,newAssets,label='Projeto Godot'){
+  createCheckpoint('Antes de importar/converter projeto');
+  files={...newFiles};
+  assets={...newAssets};
+  projectMemory=[];
+  saveProjectMemory();
+  active=Object.keys(files).find(n=>n.endsWith('.gd'))||Object.keys(files).find(n=>n.endsWith('.tscn'))||'project.godot';
+  save();
+  saveAssets();
+  $('#editor').value=files[active]||'';
+  tabs();
+  renderFileTree();
+  renderAssets();
+  lines();
+  run();
+  createCheckpoint(label);
+  document.body.classList.add('godot-mode');
+}
+
+async function convertImportedProjectToGodot(importedFiles,importedAssets){
+  const sourceNames=Object.keys(importedFiles);
+  if(!sourceNames.length) throw new Error('Nenhum arquivo de código/texto reconhecido para converter.');
+
+  const sourceProject=[
+    ...Object.entries(importedFiles).map(([name,content])=>`ARQUIVO ${name}:\n${String(content).slice(0,12000)}`),
+    ...Object.keys(importedAssets).map(name=>`ARQUIVO assets/${name}:\n[BINARY_ASSET_DISPONIVEL]`)
+  ].join('\n\n').slice(0,30000);
+
+  const prompt=[
+    'CONVERSÃO AUTOMÁTICA PARA GODOT 4.',
+    'Converta integralmente o projeto importado para um projeto Godot 4 funcional dentro do CodeZero.',
+    'Não gere ZIP, não explique como exportar e não devolva HTML/Three.js como solução final.',
+    'Crie obrigatoriamente project.godot, pelo menos uma cena .tscn e os scripts .gd necessários.',
+    'Preserve a ideia, jogabilidade, controles e sistemas existentes sempre que possível.',
+    'Use os assets listados em assets/ quando forem úteis.',
+    'Todos os arquivos finais devem ser entregues em blocos <<<FILE:nome>>>...<<<END_FILE>>>.'
+  ].join(' ');
+
+  startTaskProgress();
+  status('🎮 Convertendo projeto para Godot 4…');
+  try{
+    const r=await fetch(API,{
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({message:prompt,project:sourceProject,history:[],memory:'Conversão automática de projeto importado para Godot 4.',attachments:[]})
+    });
+    const raw=await r.text();
+    let data=null; try{data=JSON.parse(raw)}catch{}
+    if(!r.ok){
+      const detail=data?.details||data?.error||raw||('HTTP '+r.status);
+      throw new Error(String(detail).slice(0,500));
+    }
+    const full=extractText(data,raw);
+    const changes=parseChangesFromResponse(full);
+    if(!changes.length) throw new Error('A IA não retornou arquivos Godot.');
+    const godotFiles={};
+    for(const change of changes) godotFiles[change.name]=change.content;
+    if(!godotFiles['project.godot']) throw new Error('A conversão não gerou project.godot.');
+
+    installGodotWorkspace(godotFiles,importedAssets,'Convertido automaticamente para Godot');
+
+    const chat=activeChat();
+    chat.messages.push({
+      role:'assistant',
+      content:'Projeto convertido automaticamente para Godot 4.',
+      display:'🎮 Projeto convertido para Godot 4 e aberto no workspace.\n✓ '+Object.keys(godotFiles).join(', ')
+    });
+    chat.updatedAt=Date.now();
+    saveChats();
+    renderMessages();
+    renderChatList();
+    finishTaskProgress(true);
+    status('✅ Convertido para Godot: '+Object.keys(godotFiles).length+' arquivo(s)');
+  }catch(e){
+    finishTaskProgress(false);
+    throw e;
+  }
+}
+
+async function importProjectFiles(fileList){
+  if(!fileList||!fileList.length) return;
+  try{
+    status('📥 Lendo projeto…');
+    const {importedFiles,importedAssets}=await collectImportedProject(fileList);
+    if(!Object.keys(importedFiles).length&&!Object.keys(importedAssets).length) throw new Error('Nenhum arquivo compatível encontrado.');
+
+    if(importedFiles['project.godot']){
+      installGodotWorkspace(importedFiles,importedAssets,'Projeto Godot importado');
+      status('✅ Projeto Godot aberto diretamente no workspace');
+      return;
+    }
+
+    await convertImportedProjectToGodot(importedFiles,importedAssets);
+  }catch(e){
+    status('⚠️ Falha ao importar/converter: '+e.message);
+    const chat=activeChat();
+    chat.messages.push({role:'assistant',content:'Erro ao importar projeto: '+e.message,display:'⚠️ Não consegui converter o projeto: '+e.message});
+    chat.updatedAt=Date.now();
+    saveChats();
+    renderMessages();
+  }
 }
 
 async function exportGodotZip(){
@@ -1702,7 +1823,7 @@ if($('#redoAI')) $('#redoAI').onclick=redoAI;
 if($('#newFile')) $('#newFile').onclick=createFileManual;
 if($('#fileSearch')) $('#fileSearch').oninput=e=>renderFileTree(e.target.value);
 if($('#importGodot')) $('#importGodot').onclick=()=>$('#zipInput')?.click();
-if($('#zipInput')) $('#zipInput').onchange=e=>{importGodotZip(e.target.files?.[0]);e.target.value='';};
+if($('#zipInput')) $('#zipInput').onchange=e=>{importProjectFiles(e.target.files);e.target.value='';};
 if($('#attachBtn')) $('#attachBtn').onclick=openAttachmentPicker;
 if($('#attachmentInput')) $('#attachmentInput').onchange=e=>{addAttachmentFiles(e.target.files);e.target.value='';};
 const composer=$('.composer');
