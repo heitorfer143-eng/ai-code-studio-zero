@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <title>CodeZero AI Code Studio V15.2</title>
-  <link rel="stylesheet" href="style.css?v=15.2.0">
+  <title>CodeZero AI Code Studio V15.3</title>
+  <link rel="stylesheet" href="style.css?v=15.3.0">
 </head>
 <body>
   <header>
     <button id="chatToggle" class="ghost">☰ Chats</button>
-    <b>⚡ CodeZero <small>V15.2</small></b>
+    <b>⚡ CodeZero <small>V15.3</small></b>
     <span id="status">☁️ Railway</span><span id="cloudSaveStatus">Local</span><button id="accountBtn">👤 Conta</button><button id="devopsBtn">☁️ DevOps</button>
     <button id="theme">☀/☾</button>
     <button id="importGodot" title="Importe ZIP ou arquivos; projetos não-Godot serão convertidos automaticamente">📥 Importar projeto</button><input id="zipInput" type="file" hidden multiple accept=".zip,application/zip,.godot,.gd,.tscn,.tres,.gdshader,.html,.css,.js,.mjs,.ts,.tsx,.jsx,.json,.txt,.md,.png,.jpg,.jpeg,.webp,.gif"><button id="undoAI" title="Desfazer alteração da IA">↶</button><button id="redoAI" title="Refazer alteração da IA">↷</button><button id="uploadImage">📤 Asset</button><button id="mediaStudioBtn">🎨 Media AI</button><button id="new3D">🎮 Novo Godot</button><button id="exportGodot" title="Opcional: exportar o projeto Godot como ZIP">📦 Exportar</button><button id="resetProject">↻ Resetar</button><button id="run">▶ Ver projeto</button>
@@ -61,50 +61,50 @@
 
   <div id="mediaModal" class="modal hidden">
       <div class="modalCard mediaCard">
-        <div class="modalHead"><strong>🎨 CodeZero Local AI</strong><button id="mediaClose">×</button></div>
-        <div class="mediaBody">
-          <div class="freeHero">
+        <div class="modalHead"><strong>🎨 Media AI</strong><button id="mediaClose">×</button></div>
+        <div class="mediaBody compactMedia">
+          <div class="localModeBar">
             <div>
-              <strong>🟢 Local Free — R$ 0,00</strong>
-              <div>Sem API • Sem créditos • Privado • WebGPU</div>
+              <strong>Local</strong>
+              <span>Grátis • privado • sem API</span>
             </div>
             <span id="localAiBadge">Verificando GPU…</span>
           </div>
 
           <section class="mediaSection localAiSection">
-            <h3>Gerar imagem localmente</h3>
-            <div id="localAiInfo" class="mediaModelInfo">O modelo roda no seu computador. No primeiro uso, será feito um download grande e depois ele fica em cache.</div>
-            <textarea id="mediaPrompt" placeholder="Descreva a imagem que quer criar..."></textarea>
+            <div class="mediaSectionHead">
+              <div><h3>Criar imagem</h3><p id="localAiInfo">O modelo roda no seu computador e fica em cache depois do primeiro download.</p></div>
+            </div>
+            <textarea id="mediaPrompt" placeholder="Descreva a imagem..."></textarea>
             <div class="mediaRow">
               <input id="mediaName" value="generated-image.png" placeholder="nome.png">
-              <select id="mediaSize" disabled>
-                <option>512x512</option>
-              </select>
-              <button id="mediaGenerate">Gerar R$0</button>
+              <select id="mediaSize" disabled><option>512x512</option></select>
+              <button id="mediaGenerate">Gerar</button>
             </div>
             <div class="localProgress"><i id="localAiProgress"></i></div>
             <div id="localAiStatus" class="mediaModelInfo"></div>
           </section>
 
           <section class="mediaSection localEditSection">
-            <h3>Editar localmente — R$0</h3>
+            <div class="mediaSectionHead"><div><h3>Editar imagem</h3><p>Transformações locais rápidas.</p></div></div>
             <select id="mediaSource"><option value="">Escolha um asset...</option></select>
-            <textarea id="mediaEditPrompt" placeholder="Ex.: redimensione para 512x512, preto e branco, espelhe, gire 90 graus, remova fundo branco..."></textarea>
+            <textarea id="mediaEditPrompt" placeholder="Ex.: 512x512, preto e branco, espelhar, girar 90°..."></textarea>
             <div class="mediaRow">
               <input id="mediaEditName" value="edited-image.png" placeholder="nome-editado.png">
-              <button id="mediaEdit">Editar R$0</button>
+              <span></span>
+              <button id="mediaEdit">Editar</button>
             </div>
           </section>
 
           <details class="cloudOptional">
-            <summary>☁️ Cloud opcional — desativado no modo R$0,00</summary>
+            <summary>Cloud (opcional)</summary>
             <div class="mediaConnection">
-              <div><strong>Pollinations</strong><div id="pollenState" class="devopsState">Cloud desativado</div></div>
+              <div><strong>Pollinations</strong><div id="pollenState" class="devopsState">Desativado</div></div>
               <div class="mediaConnectActions">
-                <button id="pollenConnect" disabled>🌼 Conectar Pollen</button>
-                <button id="pollenKey" disabled>🔑 Usar chave</button>
+                <button id="pollenConnect" disabled>Conectar</button>
+                <button id="pollenKey" disabled>Usar chave</button>
                 <button id="pollenDisconnect" disabled>Desconectar</button>
-                <button id="pollenRefresh" disabled>↻ Modelos</button>
+                <button id="pollenRefresh" disabled>Modelos</button>
               </div>
               <div id="pollenDevice" class="pollenDevice hidden">
                 <div>Abra <a id="pollenVerifyLink" href="https://enter.pollinations.ai/device" target="_blank" rel="noopener">enter.pollinations.ai/device</a></div>
@@ -119,7 +119,7 @@
             </div>
           </details>
 
-          <div id="mediaResult" class="devopsResult"></div>
+          <div id="mediaResult" class="devopsResult mediaResult"></div>
         </div>
       </div>
     </div>
@@ -199,6 +199,6 @@
       </div>
     </div>
     <div id="drawerShade"></div>
-  <script type="module" src="app.js?v=15.2.0"></script>
+  <script type="module" src="app.js?v=15.3.0"></script>
 </body>
 </html>
