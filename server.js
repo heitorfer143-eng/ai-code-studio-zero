@@ -1043,11 +1043,11 @@ async function publicFallbackChat(payload){
     try{
       const system=wantsCode
         ? 'Você é o CodeZero. Gere código funcional em português do Brasil. Ao alterar arquivos use <<<FILE:nome>>>...<<<END_FILE>>>.'
-        : 'Você é o CodeZero. Responda em português do Brasil de forma direta.';
+        : 'Você é o CodeZero, uma IA geral e professora. Converse naturalmente em português do Brasil. Responda cumprimentos normalmente, ajude com exercícios, matemática, ciências, história, redação e dúvidas gerais. NÃO programe nem fale do projeto a menos que o usuário peça código explicitamente.';
       const messages=[
         {role:'system',content:system},
         ...(Array.isArray(payload.history)?payload.history.slice(-6):[]),
-        {role:'user',content:message+(payload.project?'\n\nPROJETO ATUAL:\n'+String(payload.project).slice(0,18000):'')}
+        {role:'user',content:message+(wantsCode&&payload.project?'\n\nPROJETO ATUAL:\n'+String(payload.project).slice(0,18000):'')}
       ];
       const response=await gatewayCompletion(messages,model,wantsCode?3200:1800,0.2);
       if(response) return {response,provider:'free-gateway-fallback',model,mode:wantsCode?'code':'chat'};
@@ -1092,7 +1092,7 @@ async function workerChat(payload){
     throw err;
   }
   const response=extractResponseText(data)||extractResponseText(raw);
-  const brokenWorkerReply=/não retornou texto|respondeu sem texto/i.test(response||'');
+  const brokenWorkerReply=/não retornou texto|respondeu sem texto|ENOSPC|Pollinations legacy text API|Fallback AI 500|deprecated for authenticated users/i.test(response||'');
   if(!response || brokenWorkerReply) {
     console.log('[worker-fallback]',brokenWorkerReply?'broken-worker-reply':'empty-worker-reply');
     return await publicFallbackChat(payload);
@@ -1133,22 +1133,39 @@ async function handleChat(req,res){
     const body=await readJson(req);
     const message=String(body.message||'').trim();
     if(!message) return sendJson(res,400,{error:'Mensagem vazia'});
+
+    const wantsCode=codingIntent(message);
     let result;
+
     if(AI_API_KEY&&AI_BASE_URL&&AI_MODEL){
       result=await providerChat(body);
+    }else if(!wantsCode){
+      // Conversa/estudo: nunca passa pelo Worker antigo de programação.
+      try{
+        result=await freeGatewayChat({...body,project:''});
+      }catch(err){
+        console.log('[chat-free-gateway-error]',String(err?.message||err));
+        result=await publicFallbackChat({...body,project:''});
+      }
     }else{
+      // Programação: agente completo; Worker fica apenas como fallback técnico.
       try{
         result=await freeGatewayChat(body);
       }catch(err){
-        console.log('[free-gateway-error]',String(err?.message||err));
+        console.log('[code-free-gateway-error]',String(err?.message||err));
         try{
           result=await workerChat(body);
+          const txt=String(result?.response||'');
+          if(/ENOSPC|Pollinations legacy text API|Fallback AI 500|deprecated for authenticated users/i.test(txt)){
+            throw new Error('Worker legado indisponível');
+          }
         }catch(workerErr){
-          console.log('[worker-error]',String(workerErr?.message||workerErr));
+          console.log('[code-worker-error]',String(workerErr?.message||workerErr));
           result=await publicFallbackChat(body);
         }
       }
     }
+
     return sendJson(res,200,result);
   }catch(e){
     const status=Number(e?.status)||502;
