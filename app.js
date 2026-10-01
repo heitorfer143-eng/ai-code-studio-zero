@@ -10,6 +10,7 @@ const ACTIVE_CHAT_KEY='zero.activeChat.v1';
 const ASSET_KEY='zero.assets.v1';
 const PROJECT_MEMORY_KEY='zero.project.memory.v1';
 const CHECKPOINT_KEY='zero.checkpoints.v1';
+const FREE_ONLY=true;
 
 let files=JSON.parse(localStorage.getItem('zero.files')||'null')||DEFAULT;
 let assets=JSON.parse(localStorage.getItem(ASSET_KEY)||'{}')||{};
@@ -29,10 +30,111 @@ let cloudSaving=false;
 let pollenState={connected:false,serverKey:false,appKeyConfigured:false,user:null};
 let mediaModels=[];
 let selectedImageModel=localStorage.getItem('zero.media.model')||'';
+let localImageModule=null;
+let localImageSupport=null;
 let chats=loadChats();
 let activeChatId=localStorage.getItem(ACTIVE_CHAT_KEY)||chats[0].id;
 if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
 
+async function getLocalImageModule(){
+  if(localImageModule) return localImageModule;
+  localImageModule=await import('./local-image.js?v=15.0.0');
+  return localImageModule;
+}
+function setLocalAiStatus(message,progress=null,error=false){
+  const el=$('#localAiStatus');
+  if(el){el.textContent=String(message||'');el.classList.toggle('error',!!error);}
+  const bar=$('#localAiProgress');
+  if(bar&&progress!=null) bar.style.width=Math.max(0,Math.min(100,Number(progress)||0))+'%';
+}
+async function initLocalImage(){
+  try{
+    const mod=await getLocalImageModule();
+    localImageSupport=await mod.getLocalImageSupport();
+    const badge=$('#localAiBadge');
+    const info=$('#localAiInfo');
+    const generate=$('#mediaGenerate');
+    if(localImageSupport.supported){
+      if(badge) badge.textContent='🟢 WebGPU pronto';
+      if(info) info.textContent='SD‑Turbo local • R$0,00 • primeiro download ~'+localImageSupport.downloadMB+' MB • depois fica em cache no navegador.';
+      if(generate) generate.disabled=false;
+      setLocalAiStatus('Pronto para gerar localmente.',0,false);
+    }else{
+      if(badge) badge.textContent='🔴 WebGPU indisponível';
+      if(info) info.textContent=localImageSupport.reason;
+      if(generate) generate.disabled=true;
+      setLocalAiStatus(localImageSupport.reason,0,true);
+    }
+    return localImageSupport;
+  }catch(e){
+    localImageSupport={supported:false,reason:e.message};
+    if($('#localAiBadge')) $('#localAiBadge').textContent='🔴 Falha ao carregar';
+    if($('#mediaGenerate')) $('#mediaGenerate').disabled=true;
+    setLocalAiStatus(e.message,0,true);
+    return localImageSupport;
+  }
+}
+async function generateLocalImageAsset(name,promptText){
+  const support=localImageSupport||await initLocalImage();
+  if(!support?.supported) throw new Error(support?.reason||'WebGPU indisponível.');
+  const mod=await getLocalImageModule();
+  const clean=String(name||'generated-image.png').trim().replace(/^assets\//,'').replace(/[^\w.\-]/g,'-')||'generated-image.png';
+  const out=await mod.generateLocalImage(String(promptText||'').trim(),{
+    onStatus:e=>setLocalAiStatus(e.message,e.progress,false)
+  });
+  assets[clean]=out.dataUrl;
+  saveAssets();
+  renderAssets();
+  renderMediaSources();
+  return {name:clean,url:out.dataUrl,model:out.model||'SD-Turbo WebGPU Local'};
+}
+function loadImageForCanvas(src){
+  return new Promise((resolve,reject)=>{
+    const img=new Image();
+    img.crossOrigin='anonymous';
+    img.onload=()=>resolve(img);
+    img.onerror=()=>reject(new Error('Não foi possível abrir a imagem localmente.'));
+    img.src=src;
+  });
+}
+async function localTransformImageAsset(sourceName,targetName,instruction){
+  const source=assets[sourceName];
+  if(!source) throw new Error('Asset não encontrado: '+sourceName);
+  const text=String(instruction||'').toLowerCase();
+  const img=await loadImageForCanvas(source);
+  let width=img.naturalWidth||img.width,height=img.naturalHeight||img.height;
+  const size=text.match(/(\d{2,4})\s*[x×]\s*(\d{2,4})/i);
+  if(size){width=Math.max(16,Math.min(4096,Number(size[1])));height=Math.max(16,Math.min(4096,Number(size[2])));}
+  const rotate90=/gire?\s*(?:em\s*)?90|rotate\s*90/.test(text);
+  if(rotate90){const t=width;width=height;height=t;}
+  const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});
+  ctx.save();
+  if(rotate90){ctx.translate(width,0);ctx.rotate(Math.PI/2);ctx.drawImage(img,0,0,height,width);}
+  else if(/espelh|mirror|flip horizontal/.test(text)){ctx.translate(width,0);ctx.scale(-1,1);ctx.drawImage(img,0,0,width,height);}
+  else if(/flip vertical|inverter vertical/.test(text)){ctx.translate(0,height);ctx.scale(1,-1);ctx.drawImage(img,0,0,width,height);}
+  else ctx.drawImage(img,0,0,width,height);
+  ctx.restore();
+
+  const needsPixels=/preto e branco|grayscale|cinza|invert|negativ|fundo branco|white background/.test(text);
+  if(needsPixels){
+    const image=ctx.getImageData(0,0,width,height),d=image.data;
+    for(let i=0;i<d.length;i+=4){
+      if(/preto e branco|grayscale|cinza/.test(text)){const y=Math.round(.299*d[i]+.587*d[i+1]+.114*d[i+2]);d[i]=d[i+1]=d[i+2]=y;}
+      if(/invert|negativ/.test(text)){d[i]=255-d[i];d[i+1]=255-d[i+1];d[i+2]=255-d[i+2];}
+      if(/fundo branco|white background/.test(text)&&d[i]>242&&d[i+1]>242&&d[i+2]>242)d[i+3]=0;
+    }
+    ctx.putImageData(image,0,0);
+  }
+
+  const recognized=!!size||rotate90||/espelh|mirror|flip|preto e branco|grayscale|cinza|invert|negativ|fundo branco|white background/.test(text);
+  if(!recognized) throw new Error('Modo R$0,00: edição generativa complexa não usa API paga. Tente: redimensionar 512x512, preto e branco, espelhar, girar 90°, inverter cores ou remover fundo branco.');
+
+  const clean=String(targetName||'edited-image.png').replace(/^assets\//,'').replace(/[^\w.\-]/g,'-');
+  const out=canvas.toDataURL('image/png');
+  assets[clean]=out;saveAssets();renderAssets();renderMediaSources();
+  return {name:clean,url:out,model:'Canvas local — R$0,00'};
+}
 async function ensureDevopsCsrf(){
   if(devopsCsrf) return devopsCsrf;
   const r=await fetch('/devops/session',{credentials:'same-origin'});
@@ -114,6 +216,7 @@ function renderMediaSources(){
   if(old&&assets[old]) sel.value=old;
 }
 async function loadMediaModels(){
+  if(FREE_ONLY){showMediaResult('Cloud desativado: modo R$0,00 ativo.',true);return;}
   try{
     const data=await pollenFetch('/pollen/models');
     mediaModels=Array.isArray(data.models)?data.models:[];
@@ -122,6 +225,11 @@ async function loadMediaModels(){
   }catch(e){showMediaResult(e.message,true);}
 }
 async function initPollen(){
+  if(FREE_ONLY){
+    pollenState={connected:false,serverKey:false,appKeyConfigured:false,user:null};
+    renderPollenState();
+    return;
+  }
   try{
     await ensureDevopsCsrf();
     const data=await pollenFetch('/pollen/status');
@@ -131,11 +239,16 @@ async function initPollen(){
 }
 function openMediaStudio(){
   $('#mediaModal')?.classList.remove('hidden');
-  renderPollenState(); renderMediaSources();
-  if(!mediaModels.length) loadMediaModels();
+  renderMediaSources();
+  initLocalImage();
+  if(FREE_ONLY){
+    pollenState={connected:false,serverKey:false,appKeyConfigured:false,user:null};
+    renderPollenState();
+  }
 }
 function closeMediaStudio(){$('#mediaModal')?.classList.add('hidden');}
 async function connectPollenDevice(){
+  if(FREE_ONLY){showMediaResult('Cloud desativado: modo R$0,00 ativo.',true);return;}
   try{
     const data=await pollenFetch('/pollen/device/start',{method:'POST',body:'{}'});
     $('#pollenDevice')?.classList.remove('hidden');
@@ -145,6 +258,7 @@ async function connectPollenDevice(){
   }catch(e){showMediaResult(e.message,true);}
 }
 async function pollPollenDevice(){
+  if(FREE_ONLY){showMediaResult('Cloud desativado: modo R$0,00 ativo.',true);return;}
   try{
     const data=await pollenFetch('/pollen/device/poll',{method:'POST',body:'{}'});
     if(data.pending){showMediaResult('Ainda aguardando autorização...');return;}
@@ -154,6 +268,7 @@ async function pollPollenDevice(){
   }catch(e){showMediaResult(e.message,true);}
 }
 async function connectPollenKey(){
+  if(FREE_ONLY){showMediaResult('Cloud desativado: modo R$0,00 ativo.',true);return;}
   const key=prompt('Cole sua chave Pollinations sk_.\nEla ficará somente na sessão segura do backend e NÃO será salva no navegador.');
   if(!key) return;
   try{
@@ -163,6 +278,7 @@ async function connectPollenKey(){
   }catch(e){showMediaResult(e.message,true);}
 }
 async function disconnectPollen(){
+  if(FREE_ONLY){showMediaResult('Cloud desativado: modo R$0,00 ativo.',true);return;}
   try{
     await pollenFetch('/pollen/disconnect',{method:'POST',body:'{}'});
     pollenState.connected=false;pollenState.user=null;renderPollenState();
@@ -181,19 +297,16 @@ function bestEditModel(){
 async function mediaGenerate(){
   const promptText=String($('#mediaPrompt')?.value||'').trim();
   const name=String($('#mediaName')?.value||'generated-image.png').trim();
-  const size=String($('#mediaSize')?.value||'1024x1024');
-  const model=$('#mediaModel')?.value||selectedImageModel;
   if(!promptText) return showMediaResult('Digite um prompt.',true);
   try{
-    showMediaResult('Gerando com '+model+'...');
-    const data=await pollenFetch('/pollen/generate',{method:'POST',body:JSON.stringify({prompt:promptText,model,size})});
-    const final=data.url||data.dataUrl;
-    if(!final) throw new Error('Imagem não retornada');
-    const clean=String(name||'generated-image.png').replace(/^assets\//,'').replace(/[^\w.\-]/g,'-');
-    assets[clean]=final;saveAssets();renderAssets();renderMediaSources();
-    showMediaResult('✅ Criada: assets/'+clean);
-    status('🖼️ Imagem criada: assets/'+clean);
-  }catch(e){showMediaResult(e.message,true);}
+    showMediaResult('🟢 Gerando localmente — R$0,00...');
+    const out=await generateLocalImageAsset(name,promptText);
+    showMediaResult('✅ Criada localmente: assets/'+out.name+'\nModelo: '+out.model+'\nCusto: R$0,00');
+    status('🖼️ Local R$0: assets/'+out.name);
+  }catch(e){
+    setLocalAiStatus(e.message,null,true);
+    showMediaResult(e.message,true);
+  }
 }
 async function mediaEdit(){
   const source=$('#mediaSource')?.value;
@@ -202,17 +315,11 @@ async function mediaEdit(){
   if(!source||!assets[source]) return showMediaResult('Escolha um asset.',true);
   if(!promptText) return showMediaResult('Digite a instrução de edição.',true);
   try{
-    const previous=selectedImageModel;
-    selectedImageModel=bestEditModel();
-    showMediaResult('Editando com '+selectedImageModel+'...');
-    const out=await editImageAsset(source,target,promptText,selectedImageModel);
-    selectedImageModel=previous||selectedImageModel;
-    renderMediaSources();
-    showMediaResult('✅ Editada: assets/'+out.name);
-    status('🛠️ Imagem editada: assets/'+out.name);
+    const out=await localTransformImageAsset(source,target,promptText);
+    showMediaResult('✅ Editada localmente: assets/'+out.name+'\nCusto: R$0,00');
+    status('🛠️ Edição local R$0: assets/'+out.name);
   }catch(e){showMediaResult(e.message,true);}
 }
-
 function workspaceState(){
   if(files[active]!=null) files[active]=$('#editor').value;
   return {
@@ -810,22 +917,14 @@ function resetProject(){
   run();
   status('↻ Projeto resetado');
 }
-async function generateImageAsset(name,prompt,model=selectedImageModel){
-  if(!mediaModels.length){try{await loadMediaModels();}catch{}}
-  const chosen=model||selectedImageModel||mediaModels[0]?.id||'black-forest-labs/flux.1-schnell';
-  const cleanName=String(name||'imagem.png').trim().replace(/^assets\//,'').replace(/[^\w.\-]/g,'-')||'imagem.png';
-  const data=await pollenFetch('/pollen/generate',{method:'POST',body:JSON.stringify({prompt:String(prompt||'').trim(),model:chosen,size:'1024x1024'})});
-  const final=data.url||data.dataUrl;
-  if(!final) throw new Error('Falha ao gerar imagem');
-  assets[cleanName]=final;
-  saveAssets();renderAssets();renderMediaSources();
-  return {name:cleanName,url:final,model:chosen};
+async function generateImageAsset(name,prompt){
+  return await generateLocalImageAsset(name,prompt);
 }
 async function manualImage(){
   const promptText=prompt('Descreva a imagem que o CodeZero deve criar:');
   if(!promptText) return;
   const name=(prompt('Nome do arquivo:','generated-image.png')||'generated-image.png').trim();
-  status('🎨 Gerando imagem…');
+  status('🎨 Gerando localmente — R$0,00…');
   try{
     const out=await generateImageAsset(name,promptText);
     status('🖼️ Imagem criada: assets/'+out.name);
@@ -918,21 +1017,8 @@ async function manualUploadImage(){
   input.click();
 }
 
-async function editImageAsset(sourceName,targetName,promptText,model=''){
-  const source=assets[sourceName];
-  if(!source) throw new Error('Asset não encontrado: '+sourceName);
-  if(!mediaModels.length){try{await loadMediaModels();}catch{}}
-  const chosen=model||bestEditModel();
-  const payload={filename:sourceName,prompt:promptText,model:chosen,size:'1024x1024'};
-  if(String(source).startsWith('data:image/')) payload.dataUrl=source;
-  else payload.sourceUrl=source;
-  const data=await pollenFetch('/image/edit',{method:'POST',body:JSON.stringify(payload)});
-  const finalUrl=data.url||data.dataUrl||'';
-  if(!finalUrl) throw new Error('Edição não retornou imagem.');
-  const cleanTarget=String(targetName||'edited-image.png').replace(/^assets\//,'').replace(/[^\w.\-]/g,'-');
-  assets[cleanTarget]=finalUrl;
-  saveAssets();renderAssets();renderMediaSources();
-  return {name:cleanTarget,url:finalUrl,model:chosen};
+async function editImageAsset(sourceName,targetName,promptText){
+  return await localTransformImageAsset(sourceName,targetName,promptText);
 }
 async function manualEditImage(preselected=''){
   const names=Object.keys(assets);
@@ -1652,4 +1738,5 @@ status('☁️ CodeZero • Railway');
   await initDevops();
   await initAccount();
   await initPollen();
+  await initLocalImage();
 })();
