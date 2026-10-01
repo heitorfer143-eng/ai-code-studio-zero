@@ -38,8 +38,13 @@ if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
 
 async function getLocalImageModule(){
   if(localImageModule) return localImageModule;
-  localImageModule=await import('./local-image.js?v=15.4.0');
+  localImageModule=await import('./local-image.js?v=15.5.0');
   return localImageModule;
+}
+async function getLocalTextModule(){
+  if(localTextModule) return localTextModule;
+  localTextModule=await import('./local-text.js?v=15.5.0');
+  return localTextModule;
 }
 function setLocalAiStatus(message,progress=null,error=false){
   const el=$('#localAiStatus');
@@ -1394,17 +1399,33 @@ async function send(){
   if(showCodingProgress) startTaskProgress();
   try{
     status('🧠 CodeZero pensando…');
-    const r=await fetch(API,{
-      method:'POST',
-      headers:{'content-type':'application/json'},
-      body:JSON.stringify({message:p,project:projectContext(),history:previousHistory,memory:projectMemoryText(),attachments:attachmentsForRequest})
-    });
-    const raw=await r.text();
+    const requestPayload={message:p,project:projectContext(),history:previousHistory,memory:projectMemoryText(),attachments:attachmentsForRequest};
+    let raw='';
     let data=null;
-    try{data=JSON.parse(raw)}catch{}
-    if(!r.ok){
-      const detail=data?.details||data?.error||raw||`HTTP ${r.status}`;
-      throw new Error(`CodeZero ${r.status}: ${String(detail).slice(0,500)}`);
+    try{
+      const r=await fetch(API,{
+        method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify(requestPayload)
+      });
+      raw=await r.text();
+      try{data=JSON.parse(raw)}catch{}
+      if(!r.ok){
+        const detail=data?.details||data?.error||raw||`HTTP ${r.status}`;
+        throw new Error(`CodeZero ${r.status}: ${String(detail).slice(0,500)}`);
+      }
+    }catch(remoteError){
+      console.warn('[remote-ai-unavailable]',remoteError);
+      status('📱 Nuvem grátis indisponível. Ativando IA local…');
+      const local=await getLocalTextModule();
+      data=await local.generateLocalTextResponse({
+        message:p,
+        history:previousHistory,
+        project:requestPayload.project,
+        wantsCode:showCodingProgress,
+        onStatus:(event)=>status('📱 '+String(event?.message||'IA local…').slice(0,110))
+      });
+      raw=JSON.stringify(data);
     }
     const full=extractText(data,raw);
     if(!full.trim()) throw new Error('O CodeZero respondeu vazio.');
@@ -1427,7 +1448,11 @@ async function send(){
     renderMessages();
     renderChatList();
     if(showCodingProgress) finishTaskProgress(true);
-    if(data?.validated){
+    if(data?.provider==='local-webgpu'){
+      status('📱 CodeZero respondeu com IA local WebGPU');
+    }else if(data?.provider==='local-rules'){
+      status('📱 CodeZero em modo local mínimo');
+    }else if(data?.validated){
       status('✅ V10 validou '+(data.changedFiles?.length||changed.length)+' arquivo(s) • '+(data.complexity||'normal'));
     }else{
       status(data?.searched?'🌐 CodeZero pesquisou e respondeu':'✅ CodeZero respondeu');
