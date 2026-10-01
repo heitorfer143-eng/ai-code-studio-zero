@@ -650,9 +650,13 @@ async function firstWorkingModel(candidates,label){
 }
 
 async function selectBestModels(){
-  ACTIVE_CHAT_MODEL=FREE_GATEWAY_MODEL;
-  ACTIVE_CODE_MODEL=FREE_GATEWAY_MODEL;
-  console.log('[brain-models]',JSON.stringify({chat:ACTIVE_CHAT_MODEL,code:ACTIVE_CODE_MODEL,mode:'anonymous-stable'}));
+  const [chatModel,codeModel]=await Promise.all([
+    firstWorkingModel(CHAT_MODEL_CANDIDATES,'chat'),
+    firstWorkingModel(CODE_MODEL_CANDIDATES,'code')
+  ]);
+  ACTIVE_CHAT_MODEL=chatModel||FREE_GATEWAY_MODEL;
+  ACTIVE_CODE_MODEL=codeModel||FREE_GATEWAY_MODEL;
+  console.log('[brain-models]',JSON.stringify({chat:ACTIVE_CHAT_MODEL,code:ACTIVE_CODE_MODEL,mode:'split-chat-code'}));
 }
 
 function parseFileBlocks(text){
