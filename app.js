@@ -38,7 +38,7 @@ if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
 
 async function getLocalImageModule(){
   if(localImageModule) return localImageModule;
-  localImageModule=await import('./local-image.js?v=15.3.0');
+  localImageModule=await import('./local-image.js?v=15.4.0');
   return localImageModule;
 }
 function setLocalAiStatus(message,progress=null,error=false){
