@@ -3,7 +3,7 @@
 // Pipeline adapted from Microsoft's MIT-licensed ONNX Runtime Web SD-Turbo example.
 
 import ort from '/node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs';
-import { AutoTokenizer } from '/node_modules/@xenova/transformers/dist/transformers.js';
+import { AutoTokenizer } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';
 
 const MODEL_BASE='https://huggingface.co/schmuell/sd-turbo-ort-web/resolve/main';
 const TOKENIZER_ID='Xenova/clip-vit-base-patch16';
