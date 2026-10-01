@@ -1013,25 +1013,37 @@ async function freeGatewayChat(payload){
 }
 async function publicFallbackChat(payload){
   const message=String(payload.message||'').trim();
-  const history=Array.isArray(payload.history)
-    ? payload.history.slice(-4).map(x=>String(x?.role||'user')+': '+String(x?.content||'')).join('\n')
-    : '';
-  const prompt=[
-    'Você é o CodeZero, uma IA especialista em programação.',
-    'Responda em português do Brasil.',
-    history ? 'Conversa recente:\n'+history : '',
-    'Pedido do usuário:\n'+message
-  ].filter(Boolean).join('\n\n');
-  const url=LEGACY_TEXT_URL+'/'+encodeURIComponent(prompt.slice(0,1800));
-  const r=await fetch(url,{headers:{accept:'text/plain'}});
-  const raw=(await r.text()).trim();
-  if(!r.ok){
-    const err=new Error('Fallback AI '+r.status+': '+raw.slice(0,300));
-    err.status=r.status;
-    throw err;
+  const wantsCode=codingIntent(message);
+
+  // Último fallback 100% sem Pollinations Text: tenta todos os modelos gratuitos conhecidos.
+  const candidates=[...new Set([
+    ...(wantsCode?CODE_MODEL_CANDIDATES:CHAT_MODEL_CANDIDATES),
+    FREE_GATEWAY_MODEL
+  ])];
+
+  let lastError=null;
+  for(const model of candidates){
+    try{
+      const system=wantsCode
+        ? 'Você é o CodeZero. Gere código funcional em português do Brasil. Ao alterar arquivos use <<<FILE:nome>>>...<<<END_FILE>>>.'
+        : 'Você é o CodeZero. Responda em português do Brasil de forma direta.';
+      const messages=[
+        {role:'system',content:system},
+        ...(Array.isArray(payload.history)?payload.history.slice(-6):[]),
+        {role:'user',content:message+(payload.project?'\n\nPROJETO ATUAL:\n'+String(payload.project).slice(0,18000):'')}
+      ];
+      const response=await gatewayCompletion(messages,model,wantsCode?3200:1800,0.2);
+      if(response) return {response,provider:'free-gateway-fallback',model,mode:wantsCode?'code':'chat'};
+    }catch(err){
+      lastError=err;
+      console.log('[fallback-model-failed]',model,String(err?.message||err).slice(0,180));
+    }
   }
-  if(!raw) throw new Error('Fallback AI respondeu vazio');
-  return {response:raw,provider:'legacy-fallback'};
+
+  const err=new Error('As IAs gratuitas estão temporariamente indisponíveis. Tente novamente em alguns segundos.');
+  err.status=503;
+  err.cause=lastError;
+  throw err;
 }
 
 async function providerSelfTest(){
@@ -1066,12 +1078,7 @@ async function workerChat(payload){
   const brokenWorkerReply=/não retornou texto|respondeu sem texto/i.test(response||'');
   if(!response || brokenWorkerReply) {
     console.log('[worker-fallback]',brokenWorkerReply?'broken-worker-reply':'empty-worker-reply');
-    try{
-      return await freeGatewayChat(payload);
-    }catch(err){
-      console.log('[free-gateway-error]',String(err?.message||err));
-      return publicFallbackChat(payload);
-    }
+    return await publicFallbackChat(payload);
   }
   return {response,provider:'workers-ai'};
 }
@@ -1117,7 +1124,12 @@ async function handleChat(req,res){
         result=await freeGatewayChat(body);
       }catch(err){
         console.log('[free-gateway-error]',String(err?.message||err));
-        result=await workerChat(body);
+        try{
+          result=await workerChat(body);
+        }catch(workerErr){
+          console.log('[worker-error]',String(workerErr?.message||workerErr));
+          result=await publicFallbackChat(body);
+        }
       }
     }
     return sendJson(res,200,result);
