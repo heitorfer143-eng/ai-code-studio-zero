@@ -19,6 +19,7 @@ const IMAGE_EDIT_MODEL=process.env.IMAGE_EDIT_MODEL||'kontext';
 const POLLINATIONS_KEY=process.env.POLLINATIONS_KEY||'';
 const POLLINATIONS_APP_KEY=process.env.POLLINATIONS_APP_KEY||'';
 const POLLINATIONS_ENTER='https://enter.pollinations.ai';
+const FREE_ONLY_MODE=String(process.env.FREE_ONLY||'true').toLowerCase()!=='false';
 const CHAT_MODEL_CANDIDATES=(process.env.CHAT_MODEL_CANDIDATES||'gemini-3.1-flash-lite,deepseek-v4-flash:0731,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
 const CODE_MODEL_CANDIDATES=(process.env.CODE_MODEL_CANDIDATES||'deepseek-v4-flash:0731,gemini-3.1-flash-lite,codestral-latest').split(',').map(x=>x.trim()).filter(Boolean);
 let ACTIVE_CHAT_MODEL=FREE_GATEWAY_MODEL;
@@ -1390,7 +1391,7 @@ const server=http.createServer(async(req,res)=>{
 
   if(pathnameSearch==='/pollen/status'&&req.method==='GET'){
     const {sess}=pollenSessionKey(req,res);
-    return sendJson(res,200,{ok:true,csrf:sess?.csrf||'',connected:Boolean(sess?.pollen?.accessToken),serverKey:Boolean(POLLINATIONS_KEY),appKeyConfigured:Boolean(POLLINATIONS_APP_KEY),user:sess?.pollen?.user||null});
+    return sendJson(res,200,{ok:true,freeOnly:FREE_ONLY_MODE,csrf:sess?.csrf||'',connected:FREE_ONLY_MODE?false:Boolean(sess?.pollen?.accessToken),serverKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_KEY),appKeyConfigured:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_APP_KEY),user:FREE_ONLY_MODE?null:(sess?.pollen?.user||null)});
   }
   if(pathnameSearch==='/pollen/models'&&req.method==='GET'){
     try{
@@ -1399,6 +1400,7 @@ const server=http.createServer(async(req,res)=>{
     }catch(e){return sendJson(res,502,{error:'Falha ao carregar modelos Pollinations',details:String(e?.message||e)});}
   }
   if(pathnameSearch==='/pollen/connect-key'&&req.method==='POST'){
+    if(FREE_ONLY_MODE) return sendJson(res,403,{error:'Modo R$0,00 ativo: operações de imagem em nuvem estão bloqueadas.'});
     const sess=getDevopsSession(req,res,true);
     if(!requireDevopsWrite(req,res,sess)) return;
     try{
@@ -1412,6 +1414,7 @@ const server=http.createServer(async(req,res)=>{
     }catch(e){return sendJson(res,400,{error:'Falha ao conectar Pollinations',details:String(e?.message||e)});}
   }
   if(pathnameSearch==='/pollen/device/start'&&req.method==='POST'){
+    if(FREE_ONLY_MODE) return sendJson(res,403,{error:'Modo R$0,00 ativo: operações de imagem em nuvem estão bloqueadas.'});
     const sess=getDevopsSession(req,res,true);
     if(!requireDevopsWrite(req,res,sess)) return;
     if(!POLLINATIONS_APP_KEY) return sendJson(res,409,{error:'POLLINATIONS_APP_KEY ainda não está configurada no servidor.'});
@@ -1424,6 +1427,7 @@ const server=http.createServer(async(req,res)=>{
     }catch(e){return sendJson(res,502,{error:'Falha ao iniciar conexão Pollinations',details:String(e?.message||e)});}
   }
   if(pathnameSearch==='/pollen/device/poll'&&req.method==='POST'){
+    if(FREE_ONLY_MODE) return sendJson(res,403,{error:'Modo R$0,00 ativo: operações de imagem em nuvem estão bloqueadas.'});
     const sess=getDevopsSession(req,res,false);
     if(!requireDevopsWrite(req,res,sess)) return;
     if(!sess?.pollenDevice?.deviceCode) return sendJson(res,400,{error:'Nenhuma conexão Pollinations pendente'});
@@ -1453,6 +1457,7 @@ const server=http.createServer(async(req,res)=>{
     return sendJson(res,200,{ok:true});
   }
   if(pathnameSearch==='/pollen/generate'&&req.method==='POST'){
+    if(FREE_ONLY_MODE) return sendJson(res,403,{error:'Modo R$0,00 ativo: operações de imagem em nuvem estão bloqueadas.'});
     const {sess,key}=pollenSessionKey(req,res);
     if(!requireDevopsWrite(req,res,sess)) return;
     try{
@@ -1467,6 +1472,7 @@ const server=http.createServer(async(req,res)=>{
   }
 
   if(pathnameSearch==='/image/edit'&&req.method==='POST'){
+    if(FREE_ONLY_MODE) return sendJson(res,403,{error:'Modo R$0,00 ativo: operações de imagem em nuvem estão bloqueadas.'});
     const {sess,key}=pollenSessionKey(req,res);
     if(!requireDevopsWrite(req,res,sess)) return;
     try{
@@ -1483,6 +1489,7 @@ const server=http.createServer(async(req,res)=>{
     }catch(e){return sendJson(res,400,{error:'Falha ao editar imagem',details:String(e?.message||e)});}
   }
   if(pathnameSearch==='/image'&&req.method==='GET'){
+    if(FREE_ONLY_MODE) return sendJson(res,403,{error:'Modo R$0,00 ativo: operações de imagem em nuvem estão bloqueadas.'});
     const {sess,key}=pollenSessionKey(req,res);
     if(!requireDevopsWrite(req,res,sess)) return;
     try{
@@ -1509,7 +1516,7 @@ const server=http.createServer(async(req,res)=>{
     return sendJson(res,200,{
       status:'online',
       service:'CodeZero Railway',
-      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,imageEditModel:IMAGE_EDIT_MODEL,image:true,imageEdit:true,pollinationsAppKey:Boolean(POLLINATIONS_APP_KEY),pollinationsServerKey:Boolean(POLLINATIONS_KEY)
+      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,imageEditModel:IMAGE_EDIT_MODEL,image:true,imageEdit:true,pollinationsAppKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_APP_KEY),pollinationsServerKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_KEY),freeOnly:FREE_ONLY_MODE
     });
   }
   if(req.url==='/chat'&&req.method==='POST') return handleChat(req,res);
