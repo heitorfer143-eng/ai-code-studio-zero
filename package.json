@@ -1,6 +1,6 @@
 {
   "name": "codezero",
-  "version": "15.4.0",
+  "version": "15.5.0",
   "private": true,
   "scripts": {
     "start": "node server.js"
@@ -12,4 +12,4 @@
     "pg": "^8.13.1",
     "onnxruntime-web": "^1.30.0"
   }
-}
+}\n
