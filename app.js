@@ -31,6 +31,7 @@ let pollenState={connected:false,serverKey:false,appKeyConfigured:false,user:nul
 let mediaModels=[];
 let selectedImageModel=localStorage.getItem('zero.media.model')||'';
 let localImageModule=null;
+let localTextModule=null;
 let localImageSupport=null;
 let chats=loadChats();
 let activeChatId=localStorage.getItem(ACTIVE_CHAT_KEY)||chats[0].id;
@@ -43,8 +44,19 @@ async function getLocalImageModule(){
 }
 async function getLocalTextModule(){
   if(localTextModule) return localTextModule;
-  localTextModule=await import('./local-text.js?v=15.5.0');
+  localTextModule=await import('./local-text.js?v=15.5.1');
   return localTextModule;
+}
+function emergencyLocalTextReply(message,wantsCode=false){
+  const text=String(message||'').trim();
+  const low=text.toLowerCase();
+  if(/^(oi|olá|ola|opa|eai|e aí|bom dia|boa tarde|boa noite)\b/.test(low)){
+    return 'Olá! 👋 O CodeZero está no modo local de emergência. Os serviços gratuitos externos estão indisponíveis, mas o chat continua funcionando.';
+  }
+  if(wantsCode){
+    return 'O CodeZero está no modo local de emergência. Seus arquivos continuam seguros, mas o modelo local completo não conseguiu carregar neste navegador agora. Posso manter o chat ativo e tentar novamente o modelo local na próxima mensagem.\n\nPedido recebido: '+text.slice(0,900);
+  }
+  return 'Estou no modo local de emergência porque os serviços gratuitos externos e o modelo local completo não responderam agora. O chat continua ativo sem API paga.\n\nSua mensagem: '+text.slice(0,1000);
 }
 function setLocalAiStatus(message,progress=null,error=false){
   const el=$('#localAiStatus');
@@ -1417,14 +1429,26 @@ async function send(){
     }catch(remoteError){
       console.warn('[remote-ai-unavailable]',remoteError);
       status('📱 Nuvem grátis indisponível. Ativando IA local…');
-      const local=await getLocalTextModule();
-      data=await local.generateLocalTextResponse({
-        message:p,
-        history:previousHistory,
-        project:requestPayload.project,
-        wantsCode:showCodingProgress,
-        onStatus:(event)=>status('📱 '+String(event?.message||'IA local…').slice(0,110))
-      });
+      try{
+        const local=await getLocalTextModule();
+        data=await local.generateLocalTextResponse({
+          message:p,
+          history:previousHistory,
+          project:requestPayload.project,
+          wantsCode:showCodingProgress,
+          onStatus:(event)=>status('📱 '+String(event?.message||'IA local…').slice(0,110))
+        });
+      }catch(localError){
+        console.warn('[local-ai-module-error]',localError);
+        data={
+          response:emergencyLocalTextReply(p,showCodingProgress),
+          provider:'local-rules',
+          model:'offline-rules-inline-v1',
+          local:true,
+          degraded:true
+        };
+        status('📱 CodeZero em modo local de emergência');
+      }
       raw=JSON.stringify(data);
     }
     const full=extractText(data,raw);
