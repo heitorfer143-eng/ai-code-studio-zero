@@ -220,3 +220,26 @@ body.godot-mode .workspace{grid-template-columns:210px 1fr;grid-template-rows:48
 .cloudModelSection{opacity:.65}
 button:disabled{opacity:.45;cursor:not-allowed}
 @media(max-width:900px){.freeHero{align-items:flex-start;flex-direction:column}}
+
+/* V15.3 Media cleanup */
+.compactMedia{gap:10px;padding:10px}
+.localModeBar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
+.localModeBar>div{display:flex;align-items:center;gap:8px;min-width:0}
+.localModeBar strong{font-size:13px}
+.localModeBar strong::before{content:'●';color:#68d69b;margin-right:6px}
+.localModeBar span{font-size:11px;color:var(--muted)}
+#localAiBadge{padding:4px 8px;border-radius:999px;background:var(--bg);border:1px solid var(--line);font-size:10px;white-space:nowrap}
+.compactMedia .mediaSection{padding:11px;border-color:var(--line);gap:8px}
+.mediaSectionHead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.mediaSectionHead h3{margin:0 0 3px;font-size:13px}
+.mediaSectionHead p{margin:0;color:var(--muted);font-size:10px}
+.compactMedia .mediaSection textarea{min-height:70px}
+.compactMedia .localProgress{height:5px}
+.compactMedia .cloudOptional summary{padding:9px 11px}
+.mediaResult:empty{display:none}
+.compactMedia .mediaResult{min-height:0;max-height:120px}
+.freeHero{display:none}
+@media(max-width:900px){
+  .localModeBar{align-items:flex-start}
+  .localModeBar>div{align-items:flex-start;flex-direction:column;gap:2px}
+}
