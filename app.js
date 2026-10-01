@@ -38,7 +38,7 @@ if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
 
 async function getLocalImageModule(){
   if(localImageModule) return localImageModule;
-  localImageModule=await import('./local-image.js?v=15.0.1');
+  localImageModule=await import('./local-image.js?v=15.3.0');
   return localImageModule;
 }
 function setLocalAiStatus(message,progress=null,error=false){
@@ -56,9 +56,9 @@ async function initLocalImage(){
     const generate=$('#mediaGenerate');
     if(localImageSupport.supported){
       if(badge) badge.textContent='🟢 WebGPU pronto';
-      if(info) info.textContent='SD‑Turbo local • R$0,00 • primeiro download ~'+localImageSupport.downloadMB+' MB • depois fica em cache no navegador.';
+      if(info) info.textContent='Modelo local • download inicial ~'+localImageSupport.downloadMB+' MB (uma vez) • depois usa o cache do navegador.';
       if(generate) generate.disabled=false;
-      setLocalAiStatus('Pronto para gerar localmente.',0,false);
+      setLocalAiStatus('Pronto.',0,false);
     }else{
       if(badge) badge.textContent='🔴 WebGPU indisponível';
       if(info) info.textContent=localImageSupport.reason;
@@ -128,12 +128,12 @@ async function localTransformImageAsset(sourceName,targetName,instruction){
   }
 
   const recognized=!!size||rotate90||/espelh|mirror|flip|preto e branco|grayscale|cinza|invert|negativ|fundo branco|white background/.test(text);
-  if(!recognized) throw new Error('Modo R$0,00: edição generativa complexa não usa API paga. Tente: redimensionar 512x512, preto e branco, espelhar, girar 90°, inverter cores ou remover fundo branco.');
+  if(!recognized) throw new Error('Esta edição local ainda não é generativa. Tente: redimensionar 512x512, preto e branco, espelhar, girar 90°, inverter cores ou remover fundo branco.');
 
   const clean=String(targetName||'edited-image.png').replace(/^assets\//,'').replace(/[^\w.\-]/g,'-');
   const out=canvas.toDataURL('image/png');
   assets[clean]=out;saveAssets();renderAssets();renderMediaSources();
-  return {name:clean,url:out,model:'Canvas local — R$0,00'};
+  return {name:clean,url:out,model:'Editor local'};
 }
 async function ensureDevopsCsrf(){
   if(devopsCsrf) return devopsCsrf;
@@ -216,7 +216,7 @@ function renderMediaSources(){
   if(old&&assets[old]) sel.value=old;
 }
 async function loadMediaModels(){
-  if(FREE_ONLY){showMediaResult('Cloud desativado: modo R$0,00 ativo.',true);return;}
+  if(FREE_ONLY){showMediaResult('Cloud opcional está desativado.',true);return;}
   try{
     const data=await pollenFetch('/pollen/models');
     mediaModels=Array.isArray(data.models)?data.models:[];
@@ -299,10 +299,10 @@ async function mediaGenerate(){
   const name=String($('#mediaName')?.value||'generated-image.png').trim();
   if(!promptText) return showMediaResult('Digite um prompt.',true);
   try{
-    showMediaResult('🟢 Gerando localmente — R$0,00...');
+    showMediaResult('Gerando localmente…');
     const out=await generateLocalImageAsset(name,promptText);
-    showMediaResult('✅ Criada localmente: assets/'+out.name+'\nModelo: '+out.model+'\nCusto: R$0,00');
-    status('🖼️ Local R$0: assets/'+out.name);
+    showMediaResult('Imagem criada: assets/'+out.name+'\n'+out.model);
+    status('🖼️ Imagem criada: assets/'+out.name);
   }catch(e){
     setLocalAiStatus(e.message,null,true);
     showMediaResult(e.message,true);
@@ -316,8 +316,8 @@ async function mediaEdit(){
   if(!promptText) return showMediaResult('Digite a instrução de edição.',true);
   try{
     const out=await localTransformImageAsset(source,target,promptText);
-    showMediaResult('✅ Editada localmente: assets/'+out.name+'\nCusto: R$0,00');
-    status('🛠️ Edição local R$0: assets/'+out.name);
+    showMediaResult('Imagem editada: assets/'+out.name);
+    status('🛠️ Imagem editada: assets/'+out.name);
   }catch(e){showMediaResult(e.message,true);}
 }
 function workspaceState(){
@@ -924,7 +924,7 @@ async function manualImage(){
   const promptText=prompt('Descreva a imagem que o CodeZero deve criar:');
   if(!promptText) return;
   const name=(prompt('Nome do arquivo:','generated-image.png')||'generated-image.png').trim();
-  status('🎨 Gerando localmente — R$0,00…');
+  status('🎨 Gerando imagem localmente…');
   try{
     const out=await generateImageAsset(name,promptText);
     status('🖼️ Imagem criada: assets/'+out.name);
@@ -1214,7 +1214,7 @@ function renderMessages(){
   root.textContent='';
   const c=activeChat();
   if(!c.messages.length){
-    appendMessage('ai','CodeZero online. Posso conversar, pesquisar e criar projetos Godot 4 completos em GDScript. Use “Novo Godot” para começar um jogo.');
+    appendMessage('ai','CodeZero online. Pode conversar comigo, pedir ajuda nos estudos, pesquisar ou programar seu projeto.');
     return;
   }
   for(const m of c.messages){
@@ -1355,6 +1355,21 @@ function extractText(value,raw='',depth=0){
   return raw||'';
 }
 
+function likelyCodeRequest(message){
+  const m=String(message||'').toLowerCase().trim();
+  if(!m) return false;
+  if(/^(oi|olá|ola|opa|eai|e aí|bom dia|boa tarde|boa noite|tudo bem|como vai)\b/.test(m) &&
+     !/\b(código|codigo|program|godot|html|css|javascript|script|site|app|jogo|bug|arquivo)\b/.test(m)) return false;
+  if(/\b(me ajuda|ajuda|explique|explica|ensine|ensina|resolva|resolve|exercício|exercicio|questão|questao|matemática|matematica|história|historia|física|fisica|química|quimica|português|portugues)\b/.test(m) &&
+     !/\b(código|codigo|programação|programacao|godot|html|css|javascript|script|bug|arquivo|função|funcao)\b/.test(m)) return false;
+  if(/\b(godot|gdscript|three\.?js|webgl|programa|programe|programar|coda|codar|implemente|refatora|debug|bug|erro de código|erro no código|erro no codigo)\b/.test(m)) return true;
+  if(/\b(jogo|game|site|página web|pagina web|aplicativo|app|sistema|dashboard|landing page)\b/.test(m) &&
+     /\b(cria|crie|criar|construa|faz|faça|fazer|monte|desenvolva)\b/.test(m)) return true;
+  if(/\b(html|css|javascript|typescript|script|arquivo|função|funcao|componente|endpoint|api|backend|frontend|sql)\b/.test(m) &&
+     /\b(cria|crie|faz|faça|adicione|coloca|corrige|arruma|altera|muda|edite|remove)\b/.test(m)) return true;
+  return false;
+}
+
 async function send(){
   const p=$('#prompt').value.trim();
   if(!p||busy) return;
@@ -1375,7 +1390,8 @@ async function send(){
   busy=true;
   $('#send').disabled=true;
   const waiting=appendMessage('ai','Pensando…');
-  startTaskProgress();
+  const showCodingProgress=likelyCodeRequest(p);
+  if(showCodingProgress) startTaskProgress();
   try{
     status('🧠 CodeZero pensando…');
     const r=await fetch(API,{
@@ -1410,14 +1426,14 @@ async function send(){
     waiting.remove();
     renderMessages();
     renderChatList();
-    finishTaskProgress(true);
+    if(showCodingProgress) finishTaskProgress(true);
     if(data?.validated){
       status('✅ V10 validou '+(data.changedFiles?.length||changed.length)+' arquivo(s) • '+(data.complexity||'normal'));
     }else{
       status(data?.searched?'🌐 CodeZero pesquisou e respondeu':'✅ CodeZero respondeu');
     }
   }catch(e){
-    finishTaskProgress(false);
+    if(showCodingProgress) finishTaskProgress(false);
     console.error(e);
     waiting.remove();
     const msg='Erro da IA: '+e.message;
