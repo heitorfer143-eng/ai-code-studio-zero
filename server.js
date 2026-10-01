@@ -553,8 +553,25 @@ function threeDIntent(message){
 function codingIntent(message){
   const m=String(message||'').toLowerCase().trim();
   if(!m) return false;
+
+  // Conversa, estudo e perguntas gerais NÃO devem virar programação só porque usam "faz".
+  if(/^(oi|olá|ola|opa|eai|e aí|bom dia|boa tarde|boa noite|tudo bem|como vai)\b/i.test(m) &&
+     !/\b(código|codigo|program|godot|html|css|javascript|script|site|app|jogo|bug|arquivo)\b/i.test(m)) return false;
+  if(/\b(me ajuda|ajuda|explique|explica|ensine|ensina|resolva|resolve|exercício|exercicio|questão|questao|matemática|matematica|história|historia|física|fisica|química|quimica|português|portugues)\b/i.test(m) &&
+     !/\b(código|codigo|programação|programacao|godot|html|css|javascript|script|bug|arquivo|função|funcao)\b/i.test(m)) return false;
+
   if(godotIntent(m)||threeDIntent(m)) return true;
-  return /\b(cria|crie|criar|construa|construir|faz|faça|fazer|adicione|adiciona|adicionar|coloca|coloque|inserir|insira|remove|remova|tirar|corrige|corrija|corrigir|arruma|arrume|conserta|conserte|altera|altere|muda|mude|editar|edite|implemente|implementa|programa|programe|coda|code|refatora|refatore|html|css|javascript|js|script|função|funcao|arquivo|index|botão|botao|site|página|pagina|app|componente|bug|erro de código|erro no código|erro no codigo)\b/i.test(m);
+
+  // Pedidos explicitamente técnicos.
+  if(/\b(programa|programe|programar|coda|code|codar|implemente|implementa|refatora|refatore|debug|depura|bug|erro de código|erro no código|erro no codigo)\b/i.test(m)) return true;
+  if(/\b(html|css|javascript|typescript|js|ts|gdscript|script|arquivo|função|funcao|componente|endpoint|api|backend|frontend|banco de dados|sql)\b/i.test(m) &&
+     /\b(cria|crie|criar|faz|faça|fazer|adicione|adiciona|coloca|coloque|corrige|corrija|arruma|arrume|altera|altere|muda|mude|editar|edite|remove|remova)\b/i.test(m)) return true;
+
+  // Produtos digitais: "faz um jogo/site/app" continua sendo código.
+  if(/\b(jogo|game|site|página web|pagina web|aplicativo|app|sistema|dashboard|landing page)\b/i.test(m) &&
+     /\b(cria|crie|criar|construa|construir|faz|faça|fazer|monte|monta|desenvolva|desenvolver)\b/i.test(m)) return true;
+
+  return false;
 }
 function extractResponseText(value, depth=0){
   if(depth>6 || value==null) return '';
@@ -823,8 +840,8 @@ async function freeGatewayChat(payload){
 
   if(!wantsCode){
     const systemPrompt=[
-      'Você é o CodeZero V10, uma IA geral e técnica integrada a um editor.',
-      'Converse naturalmente em português do Brasil e responda diretamente.',
+      'Você é o CodeZero, uma IA geral, professora e técnica integrada a um editor.',
+      'Converse naturalmente em português do Brasil e responda diretamente. Cumprimentos simples devem receber respostas naturais; exercícios e dúvidas escolares devem ser explicados e resolvidos sem mexer nos arquivos do projeto, a menos que o usuário peça código explicitamente.',
       'Não transforme conversa casual em programação.',
       'Quando houver pesquisa web, use as fontes e cite [1], [2] etc.',
       'Quando o usuário perguntar sobre Godot, priorize Godot 4.x e GDScript atuais.',
