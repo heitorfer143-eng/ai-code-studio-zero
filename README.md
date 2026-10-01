@@ -15,4 +15,4 @@ A versão atual não chama APIs de IA e não baixa modelos grandes automaticamen
 Abra `index.html` por um servidor estático. Os projetos são persistidos no `localStorage` do navegador.
 
 ## Estado
-MVP: chat com streaming visual, editor multi-arquivo, HTML/CSS/JS, preview sandbox, console e persistência local.
+MVP: chat com streaming visual, editor multi-arquivo, HTML/CSS/JS, preview sandbox, console e persistência local.\n## Fallback de chat local (V15.5)\nQuando os gateways gratuitos retornam erro, o navegador tenta carregar um LLM local via WebGPU. O modelo fica no cache do navegador depois do primeiro download. Se WebGPU/modelo não estiver disponível, entra um fallback offline mínimo para o chat não cair em 503. Nenhuma API paga é usada automaticamente.\n
