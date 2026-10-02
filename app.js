@@ -27,6 +27,21 @@ function safeWorkspacePath(value){
   if(!/^[\w.@+()\-\/ ]+$/u.test(name)) return '';
   return name;
 }
+function isSensitiveWorkspacePath(value){
+  const name=String(value||'').replace(/\\/g,'/').toLowerCase();
+  const base=name.split('/').pop()||'';
+  if(base==='.env'||(base.startsWith('.env.')&&!/\.(?:example|sample|template)$/i.test(base))) return true;
+  if(['.npmrc','.pypirc','.netrc','id_rsa','id_ed25519','credentials.json','secrets.json','secret.json'].includes(base)) return true;
+  if(/(?:^|\/)(?:service[-_]?account[^/]*\.json)$/.test(name)) return true;
+  if(/\.(?:pem|p12|pfx|key)$/i.test(base)) return true;
+  return false;
+}
+function redactClientSecrets(value){
+  return String(value||'')
+    .replace(/Bearer\s+[A-Za-z0-9._~+\/-]{8,}/gi,'Bearer [REDACTED]')
+    .replace(/(^|\n)(\s*(?:[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|DATABASE_URL|PRIVATE_KEY)[A-Z0-9_]*)\s*=\s*)[^\n]+/gi,'$1$2[REDACTED]')
+    .replace(/\b(sk|ghp|github_pat|glpat)_[A-Za-z0-9_\-.]{8,}\b/g,'[REDACTED]');
+}
 function safeAssetName(value){
   const name=safeWorkspacePath(String(value||'').replace(/^assets\//,''));
   return name&&!name.includes('/')?name:name?.split('/').pop()||'';
@@ -1197,6 +1212,7 @@ function isTextLikeFile(file){
 async function readAttachment(file){
   if(!file) return null;
   if(file.size>12*1024*1024) throw new Error(file.name+': máximo de 12 MB.');
+  if(isSensitiveWorkspacePath(file.name||'')) throw new Error('Arquivo sensível bloqueado para envio à IA. Use uma versão sem credenciais, como .env.example.');
   const safeName=safeWorkspacePath(file.name||'arquivo')||'arquivo';
   const base={name:safeName,type:file.type||'',size:file.size||0};
   const signature=await sniffFileKind(file);
@@ -1279,9 +1295,13 @@ function renderMessages(){
 }
 function status(t){$('#status').textContent=t}
 function projectContext(){
-  const code=Object.entries(files).map(([n,c])=>`ARQUIVO ${n}:\n${c}`).join('\n\n');
+  const entries=Object.entries(files);
+  const safeEntries=entries.filter(([n])=>!isSensitiveWorkspacePath(n));
+  const hidden=entries.length-safeEntries.length;
+  const code=safeEntries.map(([n,c])=>`ARQUIVO ${n}:\n${redactClientSecrets(c)}`).join('\n\n');
   const assetList=Object.keys(assets).length?'\n\nASSETS GERADOS DISPONÍVEIS:\n'+Object.keys(assets).map(n=>'assets/'+n).join('\n'):'';
-  return (code+assetList).slice(0,32000);
+  const notice=hidden?'\n\n[SEGURANÇA: '+hidden+' arquivo(s) sensível(is) omitido(s) do contexto da IA.]':'';
+  return (code+assetList+notice).slice(0,32000);
 }
 function parseChangesFromResponse(text){
   const out=[];
@@ -1289,7 +1309,7 @@ function parseChangesFromResponse(text){
   let m;
   while((m=re.exec(String(text||'')))){
     const name=safeWorkspacePath(m[1]),content=m[2].replace(/^\n/,'').replace(/\n$/,'');
-    if(name) out.push({name,content,before:Object.prototype.hasOwnProperty.call(files,name)?files[name]:''});
+    if(name&&!isSensitiveWorkspacePath(name)) out.push({name,content,before:Object.prototype.hasOwnProperty.call(files,name)?files[name]:''});
   }
   return out;
 }
@@ -1377,7 +1397,7 @@ function applyFiles(text){
   let m,changed=[];
   while((m=re.exec(text))){
     const name=safeWorkspacePath(m[1]),content=m[2].replace(/^\n/,'').replace(/\n$/,'');
-    if(!name) continue;
+    if(!name||isSensitiveWorkspacePath(name)) continue;
     files[name]=content;
     changed.push(name);
   }
@@ -1422,6 +1442,7 @@ function buildConversationContext(messages,{maxMessages=32,maxChars=18000}={}){
     if(!content) continue;
     // Evita mandar assets/data URLs gigantes ou blocos excessivos de volta ao modelo.
     content=content.replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g,'[ASSET_LOCAL]');
+    content=redactClientSecrets(content);
     const remaining=maxChars-used;
     if(remaining<=0) break;
     if(content.length>remaining){
@@ -1473,7 +1494,11 @@ async function send(){
   if(showCodingProgress) startTaskProgress();
   try{
     status('🧠 CodeZero pensando…');
-    const requestPayload={message:p,project:projectContext(),history:previousHistory,memory:projectMemoryText(),attachments:attachmentsForRequest};
+    const safeAttachments=attachmentsForRequest.map(item=>({
+      ...item,
+      text:redactClientSecrets(item.text||'')
+    }));
+    const requestPayload={message:redactClientSecrets(p),project:projectContext(),history:previousHistory,memory:redactClientSecrets(projectMemoryText()),attachments:safeAttachments};
     let raw='';
     let data=null;
     try{
@@ -1745,6 +1770,8 @@ async function collectImportedProject(fileList){
       }
     }
   }
+  const sensitiveCount=Object.keys(importedFiles).filter(isSensitiveWorkspacePath).length;
+  if(sensitiveCount) status('🔒 '+sensitiveCount+' arquivo(s) sensível(is) importado(s) localmente e excluído(s) do contexto da IA.');
   return {importedFiles,importedAssets};
 }
 
