@@ -1292,7 +1292,7 @@ const PUBLIC_ROOT_FILES=new Set([
 ]);
 const PUBLIC_RUNTIME_PREFIXES=[
   '/node_modules/onnxruntime-web/dist/',
-  '/node_modules/fflate/esm/'
+  '/node_modules/@zip.js/zip.js/'
 ];
 function safeFile(urlPath){
   let decoded;
