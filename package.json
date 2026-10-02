@@ -1,6 +1,6 @@
 {
   "name": "codezero",
-  "version": "15.6.0",
+  "version": "15.7.0",
   "private": true,
   "scripts": {
     "start": "node server.js"
@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "pg": "^8.13.1",
-    "onnxruntime-web": "^1.30.0"
+    "onnxruntime-web": "^1.30.0",
+    "fflate": "^0.8.2"
   }
 }
