@@ -462,6 +462,29 @@ async function readJson(req,max=2e6){
   }
   return JSON.parse(raw||'{}');
 }
+function boundedConversationHistory(value,maxMessages=32,maxChars=18000){
+  const src=Array.isArray(value)?value:[];
+  const out=[];
+  let used=0;
+  for(let i=src.length-1;i>=0&&out.length<maxMessages;i--){
+    const item=src[i];
+    const role=item?.role==='assistant'?'assistant':item?.role==='user'?'user':null;
+    if(!role) continue;
+    let content=String(item?.content||'').trim();
+    if(!content) continue;
+    content=content.replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g,'[ASSET_LOCAL]');
+    const remaining=maxChars-used;
+    if(remaining<=0) break;
+    if(content.length>remaining){
+      if(out.length) break;
+      content=content.slice(-remaining);
+    }
+    out.unshift({role,content});
+    used+=content.length;
+  }
+  return out;
+}
+
 function webIntent(message){
   const m=String(message||'').toLowerCase().trim();
   if(!m) return false;
@@ -827,7 +850,7 @@ async function freeGatewayChat(payload){
   const wantsWeb=webIntent(message);
   const project=wantsCode?String(payload.project||'').slice(0,32000):'';
   const memory=String(payload.memory||'').slice(0,6000);
-  const history=Array.isArray(payload.history)?payload.history.slice(-12):[];
+  const history=boundedConversationHistory(payload.history,32,18000);
   const attachmentsText=attachmentContext(payload.attachments);
   const complexity=taskComplexity(message,project);
   const projectMap=buildProjectMap(project);
@@ -872,7 +895,7 @@ async function freeGatewayChat(payload){
       'Em Godot 3D pense em árvore de cena, física, colisões, câmera, sinais, animação, navegação, performance e mobile quando relevante.',
       'Não converta projeto Godot para Three.js.'
     ].join(' ')},
-    ...history.slice(-8),
+    ...history,
     {role:'user',content:
       'PEDIDO:\n'+message+
       '\n\nCOMPLEXIDADE DETECTADA: '+complexity+
@@ -908,7 +931,7 @@ async function freeGatewayChat(payload){
       'Não diga que algo está pronto sem entregar os arquivos necessários.',
       'Arquivos conhecidos: '+knownFiles.join(', ')
     ].join(' ')},
-    ...history.slice(-8),
+    ...history,
     {role:'user',content:
       'PEDIDO ORIGINAL:\n'+message+
       '\n\nESPECIFICAÇÃO E PLANO:\n'+plan+
@@ -1050,7 +1073,7 @@ async function publicFallbackChat(payload){
         : 'Você é o CodeZero, uma IA geral e professora. Converse naturalmente em português do Brasil. Responda cumprimentos normalmente, ajude com exercícios, matemática, ciências, história, redação e dúvidas gerais. NÃO programe nem fale do projeto a menos que o usuário peça código explicitamente.';
       const messages=[
         {role:'system',content:system},
-        ...(Array.isArray(payload.history)?payload.history.slice(-6):[]),
+        ...boundedConversationHistory(payload.history,24,12000),
         {role:'user',content:message+(wantsCode&&payload.project?'\n\nPROJETO ATUAL:\n'+String(payload.project).slice(0,18000):'')}
       ];
       const response=await gatewayCompletion(messages,model,wantsCode?3200:1800,0.2);
@@ -1112,7 +1135,7 @@ async function providerChat(payload){
     : 'Você é o CodeZero, uma IA geral integrada a um editor. Converse normalmente em português do Brasil. Não altere arquivos e não use marcadores <<<FILE:...>>> em conversa casual. Só programe quando o usuário pedir explicitamente.';
   const messages=[
     {role:'system',content:systemPrompt},
-    ...(Array.isArray(payload.history)?payload.history.slice(-8):[]),
+    ...boundedConversationHistory(payload.history,32,18000),
     {role:'user',content:message+(project?'\n\nProjeto atual:\n'+project:'')}
   ];
   const r=await fetch(AI_BASE_URL+'/chat/completions',{
