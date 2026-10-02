@@ -11,6 +11,37 @@ const ASSET_KEY='zero.assets.v1';
 const PROJECT_MEMORY_KEY='zero.project.memory.v1';
 const CHECKPOINT_KEY='zero.checkpoints.v1';
 const FREE_ONLY=true;
+const MAX_IMPORT_FILE_BYTES=2*1024*1024;
+const MAX_IMPORT_IMAGE_BYTES=8*1024*1024;
+const MAX_IMPORT_ZIP_BYTES=8*1024*1024;
+const MAX_IMPORT_FILES=220;
+const MAX_IMPORT_ACCEPTED_BYTES=12*1024*1024;
+
+function safeWorkspacePath(value){
+  let name=String(value||'').trim().replace(/\\/g,'/').replace(/^\.\/+/, '');
+  name=name.replace(/\/+/g,'/');
+  if(!name||name.length>240||name.startsWith('/')||/[\u0000-\u001f\u007f]/.test(name)) return '';
+  if(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(name)) return '';
+  const parts=name.split('/');
+  if(parts.some(p=>!p||p==='.'||p==='..'||['__proto__','prototype','constructor'].includes(p.toLowerCase()))) return '';
+  if(!/^[\w.@+()\-\/ ]+$/u.test(name)) return '';
+  return name;
+}
+function safeAssetName(value){
+  const name=safeWorkspacePath(String(value||'').replace(/^assets\//,''));
+  return name&&!name.includes('/')?name:name?.split('/').pop()||'';
+}
+async function sniffFileKind(file){
+  const head=new Uint8Array(await file.slice(0,16).arrayBuffer());
+  const ascii=String.fromCharCode(...head);
+  if(head[0]===0x89&&head[1]===0x50&&head[2]===0x4e&&head[3]===0x47) return 'image';
+  if(head[0]===0xff&&head[1]===0xd8&&head[2]===0xff) return 'image';
+  if(ascii.startsWith('GIF87a')||ascii.startsWith('GIF89a')) return 'image';
+  if(ascii.startsWith('RIFF')&&ascii.slice(8,12)==='WEBP') return 'image';
+  if(ascii.startsWith('%PDF-')) return 'pdf';
+  return 'other';
+}
+
 
 let files=JSON.parse(localStorage.getItem('zero.files')||'null')||DEFAULT;
 let assets=JSON.parse(localStorage.getItem(ASSET_KEY)||'{}')||{};
@@ -39,12 +70,12 @@ if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
 
 async function getLocalImageModule(){
   if(localImageModule) return localImageModule;
-  localImageModule=await import('./local-image.js?v=15.6.0');
+  localImageModule=await import('./local-image.js?v=15.7.0');
   return localImageModule;
 }
 async function getLocalTextModule(){
   if(localTextModule) return localTextModule;
-  localTextModule=await import('./local-text.js?v=15.6.0');
+  localTextModule=await import('./local-text.js?v=15.7.0');
   return localTextModule;
 }
 function emergencyLocalTextReply(message,wantsCode=false){
@@ -678,6 +709,9 @@ async function setRailwayVariables(){
   if(!raw) return;
   const variables={};
   for(const line of raw.split(/\r?\n/)){const i=line.indexOf('=');if(i>0)variables[line.slice(0,i).trim()]=line.slice(i+1);}
+  const keys=Object.keys(variables);
+  if(!keys.length) return;
+  if(!confirm('Atualizar '+keys.length+' variável(is) no Railway?\n'+keys.join(', ')+'\n\nOs valores não serão exibidos novamente.')) return;
   try{
     const data=await devopsFetch('/devops/railway/variables',{method:'POST',body:JSON.stringify({projectId,environmentId,serviceId,variables})});
     showDevopsResult('#railwayResult','🔐 Atualizadas: '+(data.updated||[]).join(', '));
@@ -724,6 +758,7 @@ function selectChat(id){
 function deleteChat(id){
   const c=chats.find(x=>x.id===id);
   if(!c) return;
+  if(!confirm('Excluir o chat "'+(c.title||'Novo chat')+'"? Esta ação não pode ser desfeita.')) return;
   if(chats.length===1){
     chats=[freshChat()];
     activeChatId=chats[0].id;
@@ -869,8 +904,8 @@ function renderFileTree(filter=''){
           save(); tabs(); renderFileTree(); $('#editor').value=files[active]||''; lines(); run();
         }
       }else if(action.toLowerCase()==='r'){
-        const nn=prompt('Novo caminho/nome:',name);
-        if(nn&&nn!==name&&/^[\w.\-\/]+$/.test(nn)){
+        const nn=safeWorkspacePath(prompt('Novo caminho/nome:',name));
+        if(nn&&nn!==name&&!Object.prototype.hasOwnProperty.call(files,nn)){
           createCheckpoint('Antes de renomear '+name);
           files[nn]=files[name]; delete files[name]; active=nn; save(); tabs(); renderFileTree(); openFile(nn);
         }
@@ -880,8 +915,8 @@ function renderFileTree(filter=''){
   }
 }
 function createFileManual(){
-  const name=prompt('Nome/caminho do novo arquivo:','scripts/new_script.gd');
-  if(!name||!/^[\w.\-\/]+$/.test(name)||files[name]!=null) return;
+  const name=safeWorkspacePath(prompt('Nome/caminho do novo arquivo:','scripts/new_script.gd'));
+  if(!name||Object.prototype.hasOwnProperty.call(files,name)) return;
   createCheckpoint('Antes de criar '+name);
   files[name]=name.endsWith('.gd')?'extends Node\n':name.endsWith('.tscn')?'[gd_scene format=3]\n':'';
   active=name; save(); tabs(); renderFileTree(); openFile(name);
@@ -1006,15 +1041,15 @@ function renderAssets(){
 
 async function importLocalImage(file){
   if(!file) return null;
-  if(!String(file.type||'').startsWith('image/')) throw new Error('Selecione um arquivo de imagem.');
-  if(file.size>8*1024*1024) throw new Error('Imagem maior que 8 MB.');
+  if(file.size>MAX_IMPORT_IMAGE_BYTES) throw new Error('Imagem maior que 8 MB.');
+  if(await sniffFileKind(file)!=='image') throw new Error('O arquivo não possui uma assinatura de imagem suportada.');
   const dataUrl=await new Promise((resolve,reject)=>{
     const reader=new FileReader();
     reader.onload=()=>resolve(String(reader.result||''));
     reader.onerror=()=>reject(new Error('Falha ao ler a imagem.'));
     reader.readAsDataURL(file);
   });
-  const name=String(file.name||'upload.png').replace(/[^\w.\-]/g,'-');
+  const name=safeAssetName(String(file.name||'upload.png').replace(/[^\w.\-]/g,'-'))||'upload.png';
   assets[name]=dataUrl;
   saveAssets();
   renderAssets();
@@ -1162,12 +1197,16 @@ function isTextLikeFile(file){
 async function readAttachment(file){
   if(!file) return null;
   if(file.size>12*1024*1024) throw new Error(file.name+': máximo de 12 MB.');
-  const base={name:file.name||'arquivo',type:file.type||'',size:file.size||0};
-  if(String(file.type||'').startsWith('image/')){
+  const safeName=safeWorkspacePath(file.name||'arquivo')||'arquivo';
+  const base={name:safeName,type:file.type||'',size:file.size||0};
+  const signature=await sniffFileKind(file);
+  if(String(file.type||'').startsWith('image/')||/\.(png|jpg|jpeg|gif|webp)$/i.test(safeName)){
+    if(signature!=='image') throw new Error(safeName+': assinatura de imagem inválida.');
     const text=await extractImageText(file);
     return {...base,kind:'image',text,note:text?'Texto extraído localmente por OCR.':'Não foi possível extrair texto legível desta imagem.'};
   }
-  if(file.type==='application/pdf'||/\.pdf$/i.test(file.name||'')){
+  if(file.type==='application/pdf'||/\.pdf$/i.test(safeName)){
+    if(signature!=='pdf') throw new Error(safeName+': assinatura de PDF inválida.');
     const text=await extractPdfText(file);
     return {...base,kind:'pdf',text,note:'Texto extraído localmente do PDF.'};
   }
@@ -1249,8 +1288,8 @@ function parseChangesFromResponse(text){
   const re=/<<<FILE:([^>]+)>>>([\s\S]*?)<<<END_FILE>>>/g;
   let m;
   while((m=re.exec(String(text||'')))){
-    const name=m[1].trim().replace(/^\/+/,''),content=m[2].replace(/^\n/,'').replace(/\n$/,'');
-    if(/^[\w.\-\/]+$/.test(name)) out.push({name,content,before:files[name]||''});
+    const name=safeWorkspacePath(m[1]),content=m[2].replace(/^\n/,'').replace(/\n$/,'');
+    if(name) out.push({name,content,before:Object.prototype.hasOwnProperty.call(files,name)?files[name]:''});
   }
   return out;
 }
@@ -1337,8 +1376,8 @@ function applyFiles(text){
   const re=/<<<FILE:([^>]+)>>>([\s\S]*?)<<<END_FILE>>>/g;
   let m,changed=[];
   while((m=re.exec(text))){
-    const name=m[1].trim().replace(/^\/+/,''),content=m[2].replace(/^\n/,'').replace(/\n$/,'');
-    if(!/^[\w.\-\/]+$/.test(name)) continue;
+    const name=safeWorkspacePath(m[1]),content=m[2].replace(/^\n/,'').replace(/\n$/,'');
+    if(!name) continue;
     files[name]=content;
     changed.push(name);
   }
@@ -1647,45 +1686,62 @@ async function collectImportedProject(fileList){
   const list=[...(fileList||[])];
   const textExt=/\.(godot|gd|tscn|tres|gdshader|txt|md|json|cfg|ini|csv|xml|yml|yaml|shader|html|css|js|mjs|cjs|ts|tsx|jsx|py|java|cs|cpp|c|h|hpp|go|rs|php|rb|sh|sql)$/i;
   const imageExt=/\.(png|jpg|jpeg|webp|gif)$/i;
-  const {unzipSync,strFromU8}=await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js');
+  const {unzipSync,strFromU8}=await import('/node_modules/fflate/esm/browser.js');
 
+  let acceptedCount=0,acceptedBytes=0;
   const addBytes=(rawName,bytes)=>{
-    const name=String(rawName||'').replace(/^\.\//,'').replace(/\\/g,'/').replace(/^\/+/,'');
-    if(!name||name.endsWith('/')) return;
-    if(textExt.test(name)&&bytes.length<2*1024*1024){
+    const name=safeWorkspacePath(rawName);
+    if(!name||name.endsWith('/')||acceptedCount>=MAX_IMPORT_FILES) return;
+    const size=Number(bytes?.length||0);
+    if(acceptedBytes+size>MAX_IMPORT_ACCEPTED_BYTES) return;
+    if(textExt.test(name)&&size<=MAX_IMPORT_FILE_BYTES){
       importedFiles[name]=strFromU8(bytes);
+      acceptedCount++; acceptedBytes+=size;
       return;
     }
-    if(imageExt.test(name)&&bytes.length<8*1024*1024){
+    if(imageExt.test(name)&&size<=MAX_IMPORT_IMAGE_BYTES){
       const ext=name.split('.').pop().toLowerCase();
       const mime=ext==='jpg'||ext==='jpeg'?'image/jpeg':ext==='webp'?'image/webp':ext==='gif'?'image/gif':'image/png';
       let binary='';
       for(let i=0;i<bytes.length;i++) binary+=String.fromCharCode(bytes[i]);
-      importedAssets[name.replace(/^assets\//,'')]='data:'+mime+';base64,'+btoa(binary);
+      const assetName=safeAssetName(name);
+      if(!assetName) return;
+      importedAssets[assetName]='data:'+mime+';base64,'+btoa(binary);
+      acceptedCount++; acceptedBytes+=size;
     }
   };
 
   for(const file of list){
-    const name=file.webkitRelativePath||file.name||'arquivo';
+    const rawName=file.webkitRelativePath||file.name||'arquivo';
+    const name=safeWorkspacePath(rawName);
+    if(!name) continue;
     if(/\.zip$/i.test(name)||file.type==='application/zip'){
+      if(file.size>MAX_IMPORT_ZIP_BYTES) throw new Error(name+': ZIP maior que 8 MB.');
       const data=new Uint8Array(await file.arrayBuffer());
       const entries=unzipSync(data);
+      if(Object.keys(entries).length>MAX_IMPORT_FILES*3) throw new Error(name+': ZIP contém arquivos demais.');
       for(const [entryName,bytes] of Object.entries(entries)) addBytes(entryName,bytes);
       continue;
     }
     if(textExt.test(name)){
-      if(file.size<=2*1024*1024) importedFiles[name]=await file.text();
+      if(file.size<=MAX_IMPORT_FILE_BYTES&&acceptedCount<MAX_IMPORT_FILES&&acceptedBytes+file.size<=MAX_IMPORT_ACCEPTED_BYTES){
+        importedFiles[name]=await file.text();
+        acceptedCount++; acceptedBytes+=file.size;
+      }
       continue;
     }
     if(imageExt.test(name)||String(file.type||'').startsWith('image/')){
-      if(file.size<=8*1024*1024){
+      if(file.size<=MAX_IMPORT_IMAGE_BYTES&&acceptedCount<MAX_IMPORT_FILES&&acceptedBytes+file.size<=MAX_IMPORT_ACCEPTED_BYTES){
+        const kind=await sniffFileKind(file);
+        if(kind!=='image') continue;
         const dataUrl=await new Promise((resolve,reject)=>{
           const reader=new FileReader();
           reader.onload=()=>resolve(String(reader.result||''));
           reader.onerror=()=>reject(new Error('Falha ao ler '+name));
           reader.readAsDataURL(file);
         });
-        importedAssets[name.replace(/^assets\//,'')]=dataUrl;
+        const assetName=safeAssetName(name);
+        if(assetName){importedAssets[assetName]=dataUrl;acceptedCount++;acceptedBytes+=file.size;}
       }
     }
   }
