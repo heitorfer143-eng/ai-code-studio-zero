@@ -35,6 +35,8 @@ A V15.7 endurece a aplicação sem remover os recursos existentes:
 - Arquivos como `.env`, chaves privadas e credenciais são omitidos do contexto da IA e do import remoto do GitHub.
 - Uploads têm limites de tamanho/quantidade e imagens/PDFs passam por verificação de assinatura.
 - Ações destrutivas/de infraestrutura continuam exigindo confirmação do usuário.
-- Dependências de runtime são fixadas em versões específicas; o importador ZIP usa a cópia local de `fflate`.
+- Dependências de runtime são fixadas em versões específicas; o importador ZIP usa a cópia local de `@zip.js/zip.js`.
 
 Limitação conhecida: a sandbox de execução ainda não é um isolamento de sistema operacional completo. Execução de código não confiável deve continuar sendo tratada como recurso de alta confiança até a fase de sandbox dedicada.
+
+- O importador ZIP usa `@zip.js/zip.js` localmente e valida quantidade de entradas, CRC, caminhos e tamanho descompactado para reduzir risco de ZIP bomb.
