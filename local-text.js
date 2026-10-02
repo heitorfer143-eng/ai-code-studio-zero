@@ -77,14 +77,25 @@ async function loadEngine(onStatus){
   }
 }
 
-function cleanHistory(history){
-  return (Array.isArray(history)?history:[])
-    .slice(-6)
-    .map(m=>({
-      role:m?.role==='assistant'?'assistant':'user',
-      content:String(m?.content||'').slice(0,1400)
-    }))
-    .filter(m=>m.content.trim());
+function cleanHistory(history,maxMessages=12,maxChars=6000){
+  const src=Array.isArray(history)?history:[];
+  const out=[];
+  let used=0;
+  for(let i=src.length-1;i>=0&&out.length<maxMessages;i--){
+    const role=src[i]?.role==='assistant'?'assistant':src[i]?.role==='user'?'user':null;
+    if(!role) continue;
+    let content=String(src[i]?.content||'').trim();
+    if(!content) continue;
+    const remaining=maxChars-used;
+    if(remaining<=0) break;
+    if(content.length>remaining){
+      if(out.length) break;
+      content=content.slice(-remaining);
+    }
+    out.unshift({role,content});
+    used+=content.length;
+  }
+  return out;
 }
 
 function offlineReply(message,wantsCode,reason=''){
