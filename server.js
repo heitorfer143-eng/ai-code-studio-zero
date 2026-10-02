@@ -1727,6 +1727,7 @@ const server=http.createServer(async(req,res)=>{
     return sendJson(res,200,{
       status:'online',
       service:'CodeZero Railway',
+      version:'15.7.0',
       ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,imageEditModel:IMAGE_EDIT_MODEL,image:true,imageEdit:true,pollinationsAppKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_APP_KEY),pollinationsServerKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_KEY),freeOnly:FREE_ONLY_MODE
     });
   }
