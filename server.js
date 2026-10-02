@@ -1264,7 +1264,10 @@ async function handleChat(req,res){
 const PUBLIC_ROOT_FILES=new Set([
   '/index.html','/style.css','/app.js','/local-image.js','/local-text.js','/favicon.ico'
 ]);
-const PUBLIC_RUNTIME_PREFIX='/node_modules/onnxruntime-web/dist/';
+const PUBLIC_RUNTIME_PREFIXES=[
+  '/node_modules/onnxruntime-web/dist/',
+  '/node_modules/fflate/esm/'
+];
 function safeFile(urlPath){
   let decoded;
   try{decoded=decodeURIComponent(String(urlPath||'/').split('?')[0]);}catch{return null;}
@@ -1273,7 +1276,7 @@ function safeFile(urlPath){
   if(decoded.includes('\0')||/(^|\/)\.\.(?:\/|$)/.test(decoded)) return null;
 
   const allowedRoot=PUBLIC_ROOT_FILES.has(decoded);
-  const allowedRuntime=decoded.startsWith(PUBLIC_RUNTIME_PREFIX)
+  const allowedRuntime=PUBLIC_RUNTIME_PREFIXES.some(prefix=>decoded.startsWith(prefix))
     && /\.(?:m?js|wasm|map)$/i.test(decoded)
     && !decoded.includes('/../');
 
