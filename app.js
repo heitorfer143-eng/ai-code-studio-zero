@@ -39,12 +39,12 @@ if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
 
 async function getLocalImageModule(){
   if(localImageModule) return localImageModule;
-  localImageModule=await import('./local-image.js?v=15.5.0');
+  localImageModule=await import('./local-image.js?v=15.6.0');
   return localImageModule;
 }
 async function getLocalTextModule(){
   if(localTextModule) return localTextModule;
-  localTextModule=await import('./local-text.js?v=15.5.1');
+  localTextModule=await import('./local-text.js?v=15.6.0');
   return localTextModule;
 }
 function emergencyLocalTextReply(message,wantsCode=false){
@@ -1372,6 +1372,29 @@ function extractText(value,raw='',depth=0){
   return raw||'';
 }
 
+function buildConversationContext(messages,{maxMessages=32,maxChars=18000}={}){
+  const src=Array.isArray(messages)?messages:[];
+  const out=[];
+  let used=0;
+  for(let i=src.length-1;i>=0&&out.length<maxMessages;i--){
+    const m=src[i];
+    if(!m||!['user','assistant'].includes(m.role)) continue;
+    let content=String(m.content||m.display||'').trim();
+    if(!content) continue;
+    // Evita mandar assets/data URLs gigantes ou blocos excessivos de volta ao modelo.
+    content=content.replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g,'[ASSET_LOCAL]');
+    const remaining=maxChars-used;
+    if(remaining<=0) break;
+    if(content.length>remaining){
+      if(out.length) break;
+      content=content.slice(-remaining);
+    }
+    out.unshift({role:m.role,content});
+    used+=content.length;
+  }
+  return out;
+}
+
 function likelyCodeRequest(message){
   const m=String(message||'').toLowerCase().trim();
   if(!m) return false;
@@ -1391,7 +1414,7 @@ async function send(){
   const p=$('#prompt').value.trim();
   if(!p||busy) return;
   const chat=activeChat();
-  const previousHistory=chat.messages.slice(-8).map(m=>({role:m.role,content:m.content}));
+  const previousHistory=buildConversationContext(chat.messages,{maxMessages:32,maxChars:18000});
   const sentAttachments=pendingAttachments.map(a=>({name:a.name,kind:a.kind}));
   chat.messages.push({role:'user',content:p,display:p+(sentAttachments.length?'\n\n📎 '+sentAttachments.map(a=>a.name).join(', '):'')});
   if(chat.title==='Novo chat') chat.title=p.replace(/\s+/g,' ').slice(0,38)||'Novo chat';
