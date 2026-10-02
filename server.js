@@ -246,6 +246,26 @@ async function ghFetch(sess,pathName,options={}){
   if(!r.ok) throw new Error(data?.message||('GitHub HTTP '+r.status));
   return data;
 }
+function safeProjectPath(value){
+  let name=String(value||'').trim().replace(/\\/g,'/').replace(/^\.\/+/, '');
+  name=name.replace(/\/+/g,'/');
+  if(!name||name.length>240||name.startsWith('/')||/[\u0000-\u001f\u007f]/.test(name)) return '';
+  if(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(name)) return '';
+  const parts=name.split('/');
+  if(parts.some(p=>!p||p==='.'||p==='..'||['__proto__','prototype','constructor'].includes(p.toLowerCase()))) return '';
+  if(!/^[\w.@+()\-\/ ]+$/u.test(name)) return '';
+  return name;
+}
+function isSensitiveProjectPath(value){
+  const name=String(value||'').replace(/\\/g,'/').toLowerCase();
+  const base=name.split('/').pop()||'';
+  if(base==='.env'||(base.startsWith('.env.')&&!/\.(?:example|sample|template)$/i.test(base))) return true;
+  if(['.npmrc','.pypirc','.netrc','id_rsa','id_ed25519','credentials.json','secrets.json','secret.json'].includes(base)) return true;
+  if(/(?:^|\/)(?:service[-_]?account[^/]*\.json)$/.test(name)) return true;
+  if(/\.(?:pem|p12|pfx|key)$/i.test(base)) return true;
+  return false;
+}
+
 function isTextRepoPath(name){
   return /\.(godot|gd|tscn|tres|gdshader|txt|md|markdown|json|jsonc|js|mjs|cjs|ts|tsx|jsx|html|css|scss|xml|yml|yaml|csv|log|ini|cfg|conf|env|py|java|c|cc|cpp|h|hpp|cs|go|rs|php|rb|sh|sql|toml)$/i.test(name)||/(^|\/)(Dockerfile|Procfile|README|LICENSE)$/i.test(name);
 }
@@ -257,21 +277,24 @@ async function githubImportRepo(sess,fullName,branch){
   const branchData=await ghFetch(sess,'/repos/'+fullName+'/branches/'+encodeURIComponent(br));
   const commit=await ghFetch(sess,'/repos/'+fullName+'/git/commits/'+branchData.commit.sha);
   const tree=await ghFetch(sess,'/repos/'+fullName+'/git/trees/'+commit.tree.sha+'?recursive=1');
-  const files={},assets={};
+  const files=Object.create(null),assets=Object.create(null);
   let total=0,count=0;
   for(const item of (tree.tree||[])){
+    const safePath=safeProjectPath(item.path);
+    if(!safePath||isSensitiveProjectPath(safePath)) continue;
     if(item.type!=='blob'||item.size>350000||count>=140||total>3500000) continue;
-    if(!isTextRepoPath(item.path)&&!isImageRepoPath(item.path)) continue;
+    if(!isTextRepoPath(safePath)&&!isImageRepoPath(safePath)) continue;
     const blob=await ghFetch(sess,'/repos/'+fullName+'/git/blobs/'+item.sha);
     const buf=Buffer.from(String(blob.content||'').replace(/\n/g,''),'base64');
-    if(isTextRepoPath(item.path)){
+    if(isTextRepoPath(safePath)){
       const text=buf.toString('utf8');
       if(text.includes('\uFFFD')) continue;
-      files[item.path]=text;
-    }else if(isImageRepoPath(item.path)&&buf.length<1500000){
-      const ext=item.path.split('.').pop().toLowerCase();
+      files[safePath]=text;
+    }else if(isImageRepoPath(safePath)&&buf.length<1500000){
+      const ext=safePath.split('.').pop().toLowerCase();
       const mimeType=ext==='jpg'||ext==='jpeg'?'image/jpeg':ext==='webp'?'image/webp':ext==='gif'?'image/gif':'image/png';
-      assets[item.path.replace(/^assets\//,'')]='data:'+mimeType+';base64,'+buf.toString('base64');
+      const assetName=safePath.replace(/^assets\//,'');
+      if(safeProjectPath(assetName)) assets[assetName]='data:'+mimeType+';base64,'+buf.toString('base64');
     }
     total+=buf.length; count++;
   }
@@ -292,8 +315,9 @@ async function githubCommitSnapshot(sess,{fullName,branch,message,files,assets})
     }
   }
   let n=0;
-  for(const [name,val] of Object.entries(entries)){
-    if(!/^[\w.\-\/]+$/.test(name)||++n>180) continue;
+  for(const [rawName,val] of Object.entries(entries)){
+    const name=safeProjectPath(rawName);
+    if(!name||isSensitiveProjectPath(name)||++n>180) continue;
     const isObj=val&&typeof val==='object'&&val.base64;
     const blob=await ghFetch(sess,'/repos/'+fullName+'/git/blobs',{
       method:'POST',
@@ -744,12 +768,12 @@ async function selectBestModels(){
 }
 
 function parseFileBlocks(text){
-  const files={};
+  const files=Object.create(null);
   const re=/<<<FILE:([^>]+)>>>([\s\S]*?)<<<END_FILE>>>/g;
   let m;
   while((m=re.exec(String(text||'')))){
-    const name=m[1].trim().replace(/^\/+/, '');
-    if(!/^[\w.\-\/]+$/.test(name)) continue;
+    const name=safeProjectPath(m[1]);
+    if(!name||isSensitiveProjectPath(name)) continue;
     files[name]=m[2].replace(/^\n/,'').replace(/\n$/,'');
   }
   return files;
@@ -882,7 +906,9 @@ function taskComplexity(message,project){
 }
 
 function projectFileNames(project){
-  return [...String(project||'').matchAll(/^ARQUIVO\s+([^:]+):/gm)].map(m=>m[1].trim());
+  return [...String(project||'').matchAll(/^ARQUIVO\s+([^:]+):/gm)]
+    .map(m=>safeProjectPath(m[1]))
+    .filter(name=>name&&!isSensitiveProjectPath(name));
 }
 function attachmentContext(attachments){
   if(!Array.isArray(attachments)||!attachments.length) return '';
@@ -1287,6 +1313,7 @@ function safeFile(urlPath){
   return full;
 }
 const CHAT_RATE=new Map();
+const AUTH_RATE=new Map();
 function clientKey(req){
   const forwarded=String(req.headers['x-forwarded-for']||'').split(',')[0].trim();
   return forwarded||String(req.socket?.remoteAddress||'unknown');
@@ -1299,6 +1326,17 @@ function rateLimit(req,limit=30,windowMs=60000){
   CHAT_RATE.set(key,item);
   if(CHAT_RATE.size>2000){
     for(const [k,v] of CHAT_RATE) if(now-v.start>windowMs*2) CHAT_RATE.delete(k);
+  }
+  return item.count<=limit;
+}
+function authRateLimit(req,limit=8,windowMs=10*60*1000){
+  const key=clientKey(req),now=Date.now();
+  let item=AUTH_RATE.get(key);
+  if(!item||now-item.start>=windowMs) item={start:now,count:0};
+  item.count++;
+  AUTH_RATE.set(key,item);
+  if(AUTH_RATE.size>2000){
+    for(const [k,v] of AUTH_RATE) if(now-v.start>windowMs*2) AUTH_RATE.delete(k);
   }
   return item.count<=limit;
 }
@@ -1324,6 +1362,7 @@ const server=http.createServer(async(req,res)=>{
   if(pathnameSearch==='/auth/register'&&req.method==='POST'){
     try{
       if(!sameOrigin(req)) return sendJson(res,403,{error:'Origem inválida'});
+      if(!authRateLimit(req,6,10*60*1000)) return sendJson(res,429,{error:'Muitas tentativas. Aguarde alguns minutos.'});
       const body=await readJson(req,200000);
       const username=normalizeUser(body.username),password=String(body.password||'');
       if(!validUser(username)) return sendJson(res,400,{error:'Usuário deve ter 3–40 caracteres: letras minúsculas, números, ., _ ou -'});
@@ -1339,6 +1378,7 @@ const server=http.createServer(async(req,res)=>{
   if(pathnameSearch==='/auth/login'&&req.method==='POST'){
     try{
       if(!sameOrigin(req)) return sendJson(res,403,{error:'Origem inválida'});
+      if(!authRateLimit(req,10,10*60*1000)) return sendJson(res,429,{error:'Muitas tentativas de login. Aguarde alguns minutos.'});
       const body=await readJson(req,200000);
       const username=normalizeUser(body.username),password=String(body.password||'');
       const user=await authFindUser(username);
@@ -1451,7 +1491,7 @@ const server=http.createServer(async(req,res)=>{
     try{
       const body=await readJson(req,200000);
       const fullName=String(body.fullName||''),name=String(body.name||'').trim(),from=String(body.from||'main').trim();
-      if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)||!/^[A-Za-z0-9._\/-]{1,120}$/.test(name)) return sendJson(res,400,{error:'Branch inválida'});
+      if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)||!/^[A-Za-z0-9._\/-]{1,120}$/.test(name)||name.includes('..')||name.startsWith('/')||name.endsWith('/')||name.includes('@{')||name.endsWith('.lock')) return sendJson(res,400,{error:'Branch inválida'});
       const base=await ghFetch(sess,'/repos/'+fullName+'/git/ref/heads/'+encodeURIComponent(from));
       const created=await ghFetch(sess,'/repos/'+fullName+'/git/refs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref:'refs/heads/'+name,sha:base.object.sha})});
       return sendJson(res,200,{ok:true,name,sha:created.object?.sha||base.object.sha});
