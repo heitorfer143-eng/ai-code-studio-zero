@@ -1711,7 +1711,8 @@ async function collectImportedProject(fileList){
   const list=[...(fileList||[])];
   const textExt=/\.(godot|gd|tscn|tres|gdshader|txt|md|json|cfg|ini|csv|xml|yml|yaml|shader|html|css|js|mjs|cjs|ts|tsx|jsx|py|java|cs|cpp|c|h|hpp|go|rs|php|rb|sh|sql)$/i;
   const imageExt=/\.(png|jpg|jpeg|webp|gif)$/i;
-  const {unzipSync,strFromU8}=await import('/node_modules/fflate/esm/browser.js');
+  const zip=await import('/node_modules/@zip.js/zip.js/index.js');
+  zip.configure({useWebWorkers:false,useCompressionStream:true});
 
   let acceptedCount=0,acceptedBytes=0;
   const addBytes=(rawName,bytes)=>{
@@ -1720,7 +1721,11 @@ async function collectImportedProject(fileList){
     const size=Number(bytes?.length||0);
     if(acceptedBytes+size>MAX_IMPORT_ACCEPTED_BYTES) return;
     if(textExt.test(name)&&size<=MAX_IMPORT_FILE_BYTES){
-      importedFiles[name]=strFromU8(bytes);
+      try{
+        importedFiles[name]=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+      }catch{
+        return;
+      }
       acceptedCount++; acceptedBytes+=size;
       return;
     }
@@ -1742,10 +1747,33 @@ async function collectImportedProject(fileList){
     if(!name) continue;
     if(/\.zip$/i.test(name)||file.type==='application/zip'){
       if(file.size>MAX_IMPORT_ZIP_BYTES) throw new Error(name+': ZIP maior que 8 MB.');
-      const data=new Uint8Array(await file.arrayBuffer());
-      const entries=unzipSync(data);
-      if(Object.keys(entries).length>MAX_IMPORT_FILES*3) throw new Error(name+': ZIP contém arquivos demais.');
-      for(const [entryName,bytes] of Object.entries(entries)) addBytes(entryName,bytes);
+      const zipReader=new zip.ZipReader(new zip.BlobReader(file));
+      try{
+        const entries=await zipReader.getEntries();
+        if(entries.length>MAX_IMPORT_FILES*3) throw new Error(name+': ZIP contém arquivos demais.');
+        let declaredTotal=0;
+        for(const entry of entries){
+          if(entry.directory) continue;
+          const entryName=safeWorkspacePath(entry.filename);
+          if(!entryName) continue;
+          const declared=Number(entry.uncompressedSize||0);
+          if(!Number.isFinite(declared)||declared<0||declared>MAX_IMPORT_ACCEPTED_BYTES){
+            throw new Error(name+': entrada ZIP excede o limite permitido.');
+          }
+          declaredTotal+=declared;
+          if(declaredTotal>MAX_IMPORT_ACCEPTED_BYTES){
+            throw new Error(name+': conteúdo descompactado excede 12 MB.');
+          }
+          if(acceptedCount>=MAX_IMPORT_FILES) break;
+          const bytes=await entry.getData(new zip.Uint8ArrayWriter(),{checkCrc32:true});
+          if(bytes.byteLength>MAX_IMPORT_ACCEPTED_BYTES){
+            throw new Error(name+': entrada ZIP descompactada excede o limite permitido.');
+          }
+          addBytes(entryName,bytes);
+        }
+      }finally{
+        try{await zipReader.close();}catch{}
+      }
       continue;
     }
     if(textExt.test(name)){
@@ -1885,18 +1913,29 @@ async function exportGodotZip(){
   }
   try{
     status('📦 Preparando ZIP Godot…');
-    const {zipSync,strToU8}=await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js');
-    const entries={};
-    for(const [name,content] of Object.entries(files)) entries[name]=strToU8(String(content));
-    for(const [name,url] of Object.entries(assets)){
-      if(String(url).startsWith('data:')){
-        const [meta,b64]=String(url).split(',');
-        const bin=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
-        entries['assets/'+name]=bin;
+    const zip=await import('/node_modules/@zip.js/zip.js/index.js');
+    zip.configure({useWebWorkers:false,useCompressionStream:true});
+    const writer=new zip.BlobWriter('application/zip');
+    const zipWriter=new zip.ZipWriter(writer,{level:6});
+    try{
+      for(const [rawName,content] of Object.entries(files)){
+        const name=safeWorkspacePath(rawName);
+        if(!name) continue;
+        await zipWriter.add(name,new zip.TextReader(String(content)));
       }
+      for(const [rawName,url] of Object.entries(assets)){
+        const assetName=safeAssetName(rawName);
+        if(!assetName||!String(url).startsWith('data:')) continue;
+        const [,b64='']=String(url).split(',');
+        const bin=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+        await zipWriter.add('assets/'+assetName,new zip.Uint8ArrayReader(bin));
+      }
+      await zipWriter.close();
+    }catch(e){
+      try{await zipWriter.close();}catch{}
+      throw e;
     }
-    const zipped=zipSync(entries,{level:6});
-    const blob=new Blob([zipped],{type:'application/zip'});
+    const blob=await writer.getData();
     const a=document.createElement('a');
     a.href=URL.createObjectURL(blob);
     a.download='CodeZero-Godot-Project.zip';
