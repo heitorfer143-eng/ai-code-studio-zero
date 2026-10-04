@@ -991,13 +991,17 @@ async function freeGatewayChat(payload){
   const wantsGodot=godotIntent(message)||/ARQUIVO project\.godot:/m.test(String(payload.project||''));
   const wants3D=threeDIntent(message);
   const wantsWeb=webIntent(message);
-  const project=wantsCode?String(payload.project||'').slice(0,32000):'';
+  const project=wantsCode?String(payload.project||'').slice(0,30000):'';
+  const projectIndexText=wantsCode?projectIndexContext(payload.projectIndex):'';
+  const conversationSummary=conversationSummaryContext(payload.conversationSummary);
   const memory=String(payload.memory||'').slice(0,6000);
-  const history=boundedConversationHistory(payload.history,32,18000);
+  const history=boundedConversationHistory(payload.history,24,14000);
   const attachmentsText=attachmentContext(payload.attachments);
-  const complexity=taskComplexity(message,project);
+  const complexity=taskComplexity(message,project,projectIndexText);
   const projectMap=buildProjectMap(project);
   const projectMapText=JSON.stringify(projectMap,null,2).slice(0,8000);
+  const summaryContext=conversationSummary?'\n\nRESUMO AUTOMÁTICO DO CONTEXTO ANTIGO:\n'+conversationSummary:'';
+  const globalIndexContext=projectIndexText?'\n\nÍNDICE GLOBAL DO PROJETO (metadados, sem segredos):\n'+projectIndexText:'';
 
   let sources=[];
   if(wantsWeb){
@@ -1021,10 +1025,10 @@ async function freeGatewayChat(payload){
     const messages=[
       {role:'system',content:systemPrompt},
       ...history,
-      {role:'user',content:message+(memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+attachmentsText+webContext}
+      {role:'user',content:message+summaryContext+(memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+attachmentsText+webContext}
     ];
     const response=await gatewayCompletion(messages,ACTIVE_CHAT_MODEL,2600,0.3);
-    return {response,provider:'brain-v10',model:ACTIVE_CHAT_MODEL,mode:'chat',complexity,searched:wantsWeb,sources:sources.map(({title,url})=>({title,url}))};
+    return {response,provider:'brain-v10',model:ACTIVE_CHAT_MODEL,mode:'chat',complexity,searched:wantsWeb,sources:sources.map(({title,url})=>({title,url})),context:contextStatsPublic(payload.contextStats),summarized:Boolean(conversationSummary)};
   }
 
   // Passo 1: especificação + plano.
@@ -1033,6 +1037,8 @@ async function freeGatewayChat(payload){
       'Você é o arquiteto sênior do CodeZero V10.',
       'Converta o pedido em requisitos verificáveis, riscos, arquivos afetados e plano.',
       'Liste critérios de aceitação concretos antes do plano.',
+      'Use o ÍNDICE GLOBAL para entender a estrutura inteira e os ARQUIVOS MAIS RELEVANTES para detalhes de implementação.',
+      'Se um arquivo necessário aparecer no índice mas não estiver no conteúdo recuperado, não invente seu conteúdo; planeje a mudança com cautela.',
       'Nunca escreva blocos <<<FILE>>> nesta etapa.',
       'Para Godot use Godot 4.x, GDScript atual, caminhos res://, cenas .tscn, recursos .tres/.gdshader e Input Map coerente.',
       'Em Godot 3D pense em árvore de cena, física, colisões, câmera, sinais, animação, navegação, performance e mobile quando relevante.',
@@ -1042,9 +1048,11 @@ async function freeGatewayChat(payload){
     {role:'user',content:
       'PEDIDO:\n'+message+
       '\n\nCOMPLEXIDADE DETECTADA: '+complexity+
-      '\n\nMAPA DO PROJETO:\n'+projectMapText+
+      '\n\nMAPA DOS ARQUIVOS RECUPERADOS:\n'+projectMapText+
+      globalIndexContext+
+      summaryContext+
       (memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+
-      '\n\nPROJETO ATUAL:\n'+project+
+      '\n\nARQUIVOS MAIS RELEVANTES PARA ESTE PEDIDO:\n'+project+
       attachmentsText+
       webContext
     }
@@ -1072,15 +1080,18 @@ async function freeGatewayChat(payload){
       'Se o pedido for grande, prefira arquitetura modular em vários arquivos.',
       'Só use <<<IMAGE:...>>> ou <<<EDIT_IMAGE:...>>> quando o usuário pedir explicitamente imagem.',
       'Não diga que algo está pronto sem entregar os arquivos necessários.',
-      'Arquivos conhecidos: '+knownFiles.join(', ')
+      'O contexto foi recuperado por relevância; não presuma conteúdo de arquivos que aparecem apenas no índice.',
+      'Arquivos recuperados com conteúdo: '+knownFiles.join(', ')
     ].join(' ')},
     ...history,
     {role:'user',content:
       'PEDIDO ORIGINAL:\n'+message+
       '\n\nESPECIFICAÇÃO E PLANO:\n'+plan+
-      '\n\nMAPA DO PROJETO:\n'+projectMapText+
+      '\n\nMAPA DOS ARQUIVOS RECUPERADOS:\n'+projectMapText+
+      globalIndexContext+
+      summaryContext+
       (memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+
-      '\n\nPROJETO ATUAL:\n'+project+
+      '\n\nARQUIVOS MAIS RELEVANTES PARA ESTE PEDIDO:\n'+project+
       attachmentsText+
       webContext
     }
@@ -1195,7 +1206,9 @@ async function freeGatewayChat(payload){
     changedFiles:Object.keys(files),
     projectMap,
     searched:wantsWeb,
-    sources:sources.map(({title,url})=>({title,url}))
+    sources:sources.map(({title,url})=>({title,url})),
+    context:contextStatsPublic(payload.contextStats),
+    summarized:Boolean(conversationSummary)
   };
 }
 async function publicFallbackChat(payload){
