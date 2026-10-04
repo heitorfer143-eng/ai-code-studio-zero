@@ -933,6 +933,8 @@ function projectIndexContext(value){
   return JSON.stringify({
     totalFiles:Math.max(files.length,Math.min(100000,Number(data.totalFiles)||0)),
     totalBytes:Math.max(0,Math.min(2*1024*1024*1024,Number(data.totalBytes)||0)),
+    indexedFiles:files.length,
+    omittedFiles:Math.max(0,Math.min(100000,Number(data.omittedFiles)||0)),
     languages,
     files
   }).slice(0,12000);
