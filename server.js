@@ -876,10 +876,17 @@ function buildProjectMap(project){
   return {files:names,scenes,scripts,resources,refs,mainScene};
 }
 
-function validateProjectReferences(generatedFiles,project){
+function validateProjectReferences(generatedFiles,project,projectIndexText=''){
   const original=parseProjectSnapshot(project);
   const combined={...original,...generatedFiles};
   const names=new Set(Object.keys(combined));
+  try{
+    const indexed=JSON.parse(projectIndexText||'{}');
+    for(const item of Array.isArray(indexed?.files)?indexed.files:[]){
+      const name=safeProjectPath(item?.name);
+      if(name&&!isSensitiveProjectPath(name)) names.add(name);
+    }
+  }catch{}
   const errors=[];
   for(const [name,content] of Object.entries(generatedFiles)){
     for(const m of String(content).matchAll(/res:\/\/([^"')\s]+)/g)){
@@ -1102,7 +1109,7 @@ async function freeGatewayChat(payload){
   let files=parseFileBlocks(draft);
   let validationErrors=[
     ...validateGeneratedFiles(files),
-    ...validateProjectReferences(files,project)
+    ...validateProjectReferences(files,project,projectIndexText)
   ];
   const maxRepairs=complexity==='high'?3:2;
   for(let repair=0;repair<maxRepairs && validationErrors.length;repair++){
@@ -1126,7 +1133,7 @@ async function freeGatewayChat(payload){
     files=parseFileBlocks(draft);
     validationErrors=[
       ...validateGeneratedFiles(files),
-      ...validateProjectReferences(files,project)
+      ...validateProjectReferences(files,project,projectIndexText)
     ];
   }
 
@@ -1152,7 +1159,7 @@ async function freeGatewayChat(payload){
     const reviewedFiles=parseFileBlocks(reviewed);
     const reviewedErrors=[
       ...validateGeneratedFiles(reviewedFiles),
-      ...validateProjectReferences(reviewedFiles,project)
+      ...validateProjectReferences(reviewedFiles,project,projectIndexText)
     ];
     if(Object.keys(reviewedFiles).length && !reviewedErrors.length){
       draft=reviewed;
@@ -1176,7 +1183,7 @@ async function freeGatewayChat(payload){
           {role:'user',content:'PEDIDO:\n'+message+'\n\nPROJETO:\n'+project+'\n\nSOLUÇÃO:\n'+draft+'\n\nJUIZ:\n'+judge}
         ],ACTIVE_CODE_MODEL,5200,0.02);
         const finalFiles=parseFileBlocks(finalRepair);
-        const finalErrors=[...validateGeneratedFiles(finalFiles),...validateProjectReferences(finalFiles,project)];
+        const finalErrors=[...validateGeneratedFiles(finalFiles),...validateProjectReferences(finalFiles,project,projectIndexText)];
         if(Object.keys(finalFiles).length&&!finalErrors.length){
           draft=finalRepair;
           files=finalFiles;
