@@ -1565,29 +1565,78 @@ async function requestAgentRuntimeRepair({
   if(!diag.length) throw new Error('Nenhum diagnóstico de runtime disponível para reparo.');
   const searchQuery=originalPrompt+' '+diag.map(d=>d.file+' '+d.message).join(' ');
   const smart=projectContext(searchQuery);
-  const r=await fetch('/agent/repair',{
-    method:'POST',
-    headers:{'content-type':'application/json'},
-    body:JSON.stringify({
-      message:redactClientSecrets(originalPrompt),
-      attempt,
-      diagnostics:diag,
-      project:smart.text,
-      projectIndex:smart.indexText,
-      contextStats:smart.stats,
-      conversationSummary:redactClientSecrets(conversationSummary||''),
-      memory:redactClientSecrets(memory||'')
-    })
-  });
-  const raw=await r.text();
-  let data=null; try{data=JSON.parse(raw)}catch{}
-  if(!r.ok){
-    const detail=data?.details||data?.error||raw||('HTTP '+r.status);
-    throw new Error(String(detail).slice(0,500));
+
+  const payload={
+    message:redactClientSecrets(originalPrompt),
+    attempt,
+    diagnostics:diag,
+    project:smart.text,
+    projectIndex:smart.indexText,
+    contextStats:smart.stats,
+    conversationSummary:redactClientSecrets(conversationSummary||''),
+    memory:redactClientSecrets(memory||'')
+  };
+
+  let remoteError=null;
+  try{
+    const r=await fetch('/agent/repair',{
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    const raw=await r.text();
+    let data=null; try{data=JSON.parse(raw)}catch{}
+    if(!r.ok){
+      const detail=data?.details||data?.error||raw||('HTTP '+r.status);
+      throw new Error(String(detail).slice(0,500));
+    }
+    const response=extractText(data,raw);
+    if(!response.trim()) throw new Error('Debugger Agent respondeu vazio.');
+    return {data,response};
+  }catch(err){
+    remoteError=err;
+    console.warn('[agent-remote-repair-unavailable]',err);
   }
-  const response=extractText(data,raw);
-  if(!response.trim()) throw new Error('Debugger Agent respondeu vazio.');
-  return {data,response};
+
+  // Fallback 100% local/gratuito. Não envia os diagnósticos a outro serviço.
+  try{
+    status('📱 Debugger remoto indisponível. Tentando modelo local…');
+    const local=await getLocalTextModule();
+    const diagnosticText=diag.map((d,i)=>
+      (i+1)+'. ['+d.kind+'] '+(d.file?d.file+' ':'')+d.message
+    ).join('\n');
+    const localPrompt=[
+      'Você é o Debugger Agent local do CodeZero V15.9.',
+      'Corrija os erros reais de runtime abaixo sem remover funcionalidades corretas.',
+      'Devolva TODO arquivo alterado em <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>.',
+      'Tentativa '+attempt+' de '+AGENT_RUNTIME_REPAIR_LIMIT+'.',
+      '',
+      'PEDIDO ORIGINAL:',
+      originalPrompt,
+      '',
+      'ERROS DE RUNTIME:',
+      diagnosticText
+    ].join('\n');
+
+    const data=await local.generateLocalTextResponse({
+      message:localPrompt,
+      history:[],
+      conversationSummary,
+      project:smart.text,
+      wantsCode:true,
+      onStatus:event=>status('📱 '+String(event?.message||'Debugger local…').slice(0,110))
+    });
+    const response=extractText(data,JSON.stringify(data));
+    if(!response.trim()) throw new Error('Debugger local respondeu vazio.');
+    return {
+      data:{...data,provider:data?.provider==='local-webgpu'?'local-webgpu-debugger':'local-debugger-degraded'},
+      response
+    };
+  }catch(localErr){
+    const remote=String(remoteError?.message||remoteError||'').slice(0,240);
+    const local=String(localErr?.message||localErr||'').slice(0,240);
+    throw new Error('Reparo remoto e local indisponíveis. Remoto: '+remote+' | Local: '+local);
+  }
 }
 async function runAgentSelfCorrection({
   originalPrompt,
