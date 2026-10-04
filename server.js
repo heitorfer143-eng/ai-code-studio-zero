@@ -893,9 +893,65 @@ function validateProjectReferences(generatedFiles,project){
   return errors;
 }
 
-function taskComplexity(message,project){
+function projectIndexContext(value){
+  let data=value;
+  if(typeof value==='string'){
+    try{data=JSON.parse(value);}catch{return '';}
+  }
+  if(!data||typeof data!=='object') return '';
+  const files=[];
+  for(const raw of Array.isArray(data.files)?data.files.slice(0,260):[]){
+    const name=safeProjectPath(raw?.name);
+    if(!name||isSensitiveProjectPath(name)) continue;
+    const cleanList=(v,max=18)=>Array.isArray(v)
+      ? v.map(x=>String(x||'').replace(/[\r\n\0]/g,' ').trim().slice(0,120)).filter(Boolean).slice(0,max)
+      : [];
+    files.push({
+      name,
+      language:String(raw?.language||'text').replace(/[^a-zA-Z0-9+.#_-]/g,'').slice(0,30)||'text',
+      lines:Math.max(0,Math.min(1000000,Number(raw?.lines)||0)),
+      bytes:Math.max(0,Math.min(50*1024*1024,Number(raw?.bytes)||0)),
+      symbols:cleanList(raw?.symbols,18),
+      imports:cleanList(raw?.imports,12),
+      refs:cleanList(raw?.refs,12)
+    });
+  }
+  const languages={};
+  if(data.languages&&typeof data.languages==='object'){
+    for(const [k,v] of Object.entries(data.languages).slice(0,40)){
+      const key=String(k).replace(/[^a-zA-Z0-9+.#_-]/g,'').slice(0,30);
+      if(key) languages[key]=Math.max(0,Math.min(100000,Number(v)||0));
+    }
+  }
+  return JSON.stringify({
+    totalFiles:Math.max(files.length,Math.min(100000,Number(data.totalFiles)||0)),
+    totalBytes:Math.max(0,Math.min(2*1024*1024*1024,Number(data.totalBytes)||0)),
+    languages,
+    files
+  }).slice(0,12000);
+}
+function conversationSummaryContext(value){
+  return redactSecrets(String(value||''))
+    .replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g,'[ASSET_LOCAL]')
+    .replace(/<<<FILE:[^>]+>>>[\s\S]*?(?:<<<END_FILE>>>|$)/g,'[ALTERAÇÃO DE ARQUIVO OMITIDA]')
+    .slice(0,6000);
+}
+function contextStatsPublic(value){
+  if(!value||typeof value!=='object') return null;
+  return {
+    selectedFiles:Math.max(0,Math.min(1000,Number(value.selectedFiles)||0)),
+    totalFiles:Math.max(0,Math.min(100000,Number(value.totalFiles)||0)),
+    selectedChars:Math.max(0,Math.min(100000,Number(value.selectedChars)||0)),
+    indexedBytes:Math.max(0,Math.min(2*1024*1024*1024,Number(value.indexedBytes)||0)),
+    hiddenSensitive:Math.max(0,Math.min(100000,Number(value.hiddenSensitive)||0))
+  };
+}
+
+function taskComplexity(message,project,projectIndexText=''){
   const m=String(message||'').toLowerCase();
-  const files=projectFileNames(project).length;
+  let indexedFiles=0;
+  try{indexedFiles=Number(JSON.parse(projectIndexText||'{}')?.totalFiles)||0;}catch{}
+  const files=Math.max(projectFileNames(project).length,indexedFiles);
   let score=0;
   if(files>=6) score++;
   if(files>=12) score++;
