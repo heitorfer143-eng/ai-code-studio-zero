@@ -284,11 +284,14 @@ function excerptContent(content,queryTokens,maxChars){
 }
 
 export function serializeProjectIndex(index,maxChars=12000){
-  const compact={
+  const out={
     totalFiles:index?.totalFiles||0,
     totalBytes:index?.totalBytes||0,
     languages:index?.languages||{},
-    files:(index?.files||[]).map(x=>({
+    files:[]
+  };
+  for(const x of index?.files||[]){
+    const item={
       name:x.name,
       language:x.language,
       lines:x.lines,
@@ -296,10 +299,14 @@ export function serializeProjectIndex(index,maxChars=12000){
       symbols:(x.symbols||[]).slice(0,18),
       imports:(x.imports||[]).slice(0,12),
       refs:(x.refs||[]).slice(0,12)
-    }))
-  };
-  const raw=JSON.stringify(compact);
-  return raw.length<=maxChars?raw:raw.slice(0,maxChars);
+    };
+    out.files.push(item);
+    if(JSON.stringify(out).length>maxChars){
+      out.files.pop();
+      break;
+    }
+  }
+  return JSON.stringify(out);
 }
 
 export function buildSmartProjectContext({
