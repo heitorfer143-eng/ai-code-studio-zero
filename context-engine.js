@@ -75,35 +75,38 @@ function extractFileIndex(name,content){
   const source=text(content);
   const lang=languageFromPath(name);
   const symbols=[],imports=[],refs=[],sections=[];
+  const analysisSource=source.length>120000
+    ? source.slice(0,90000)+'\n/* ... índice parcial de arquivo grande ... */\n'+source.slice(-30000)
+    : source;
 
   if(['javascript','typescript'].includes(lang)){
-    symbols.push(...takeMatches(source,/(?:^|\n)\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g));
-    symbols.push(...takeMatches(source,/(?:^|\n)\s*(?:export\s+)?class\s+([A-Za-z_$][\w$]*)\b/g));
-    symbols.push(...takeMatches(source,/(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g));
-    imports.push(...takeMatches(source,/\b(?:from\s*|import\s*\()\s*['"]([^'"]+)['"]/g));
-    imports.push(...takeMatches(source,/\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g));
+    symbols.push(...takeMatches(analysisSource,/(?:^|\n)\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/g));
+    symbols.push(...takeMatches(analysisSource,/(?:^|\n)\s*(?:export\s+)?class\s+([A-Za-z_$][\w$]*)\b/g));
+    symbols.push(...takeMatches(analysisSource,/(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/g));
+    imports.push(...takeMatches(analysisSource,/\b(?:from\s*|import\s*\()\s*['"]([^'"]+)['"]/g));
+    imports.push(...takeMatches(analysisSource,/\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g));
   }else if(lang==='python'){
-    symbols.push(...takeMatches(source,/(?:^|\n)\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/g));
-    symbols.push(...takeMatches(source,/(?:^|\n)\s*class\s+([A-Za-z_]\w*)\b/g));
-    imports.push(...takeMatches(source,/(?:^|\n)\s*(?:from|import)\s+([A-Za-z0-9_\.]+)/g));
+    symbols.push(...takeMatches(analysisSource,/(?:^|\n)\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/g));
+    symbols.push(...takeMatches(analysisSource,/(?:^|\n)\s*class\s+([A-Za-z_]\w*)\b/g));
+    imports.push(...takeMatches(analysisSource,/(?:^|\n)\s*(?:from|import)\s+([A-Za-z0-9_\.]+)/g));
   }else if(lang==='gdscript'){
-    symbols.push(...takeMatches(source,/(?:^|\n)\s*func\s+([A-Za-z_]\w*)\s*\(/g));
-    symbols.push(...takeMatches(source,/(?:^|\n)\s*class_name\s+([A-Za-z_]\w*)\b/g));
-    symbols.push(...takeMatches(source,/(?:^|\n)\s*signal\s+([A-Za-z_]\w*)\b/g));
-    symbols.push(...takeMatches(source,/(?:^|\n)\s*(?:@\w+(?:\([^\n]*\))?\s*)*(?:var|const)\s+([A-Za-z_]\w*)\b/g));
-    imports.push(...takeMatches(source,/\b(?:preload|load)\s*\(\s*["']res:\/\/([^"']+)["']\s*\)/g));
+    symbols.push(...takeMatches(analysisSource,/(?:^|\n)\s*func\s+([A-Za-z_]\w*)\s*\(/g));
+    symbols.push(...takeMatches(analysisSource,/(?:^|\n)\s*class_name\s+([A-Za-z_]\w*)\b/g));
+    symbols.push(...takeMatches(analysisSource,/(?:^|\n)\s*signal\s+([A-Za-z_]\w*)\b/g));
+    symbols.push(...takeMatches(analysisSource,/(?:^|\n)\s*(?:@\w+(?:\([^\n]*\))?\s*)*(?:var|const)\s+([A-Za-z_]\w*)\b/g));
+    imports.push(...takeMatches(analysisSource,/\b(?:preload|load)\s*\(\s*["']res:\/\/([^"']+)["']\s*\)/g));
   }else if(lang==='godot-scene'){
-    symbols.push(...takeMatches(source,/\[node\s+name="([^"]+)"/g));
-    imports.push(...takeMatches(source,/\bpath="res:\/\/([^"]+)"/g));
+    symbols.push(...takeMatches(analysisSource,/\[node\s+name="([^"]+)"/g));
+    imports.push(...takeMatches(analysisSource,/\bpath="res:\/\/([^"]+)"/g));
   }else if(lang==='html'){
-    symbols.push(...takeMatches(source,/\bid=["']([^"']+)["']/g));
-    imports.push(...takeMatches(source,/(?:src|href)=["']([^"']+)["']/g));
+    symbols.push(...takeMatches(analysisSource,/\bid=["']([^"']+)["']/g));
+    imports.push(...takeMatches(analysisSource,/(?:src|href)=["']([^"']+)["']/g));
   }else if(lang==='css'||lang==='scss'){
-    symbols.push(...takeMatches(source,/(?:^|\n)\s*([.#][A-Za-z_-][\w-]*)\s*[,\{]/g));
+    symbols.push(...takeMatches(analysisSource,/(?:^|\n)\s*([.#][A-Za-z_-][\w-]*)\s*[,\{]/g));
   }
 
-  sections.push(...takeMatches(source,/(?:^|\n)\s*\[([^\]\n]+)\]\s*$/g));
-  refs.push(...takeMatches(source,/res:\/\/([^"'\)\s]+)/g));
+  sections.push(...takeMatches(analysisSource,/(?:^|\n)\s*\[([^\]\n]+)\]\s*$/g));
+  refs.push(...takeMatches(analysisSource,/res:\/\/([^"'\)\s]+)/g));
   refs.push(...imports.filter(x=>/^(?:\.\.?\/|res:\/\/)/.test(x)));
 
   return {
@@ -115,7 +118,8 @@ function extractFileIndex(name,content){
     imports:uniq(imports,40),
     refs:uniq(refs,50),
     sections:uniq(sections,30),
-    hash:hashText(source)
+    hash:hashText(source),
+    searchText:normalizeToken(source.length>24000?source.slice(0,18000)+' '+source.slice(-6000):source)
   };
 }
 
@@ -196,7 +200,7 @@ function rankFiles(query,files,index,activeFile=''){
   const ranked=[];
 
   for(const item of index.files){
-    const content=normalizeToken(files[item.name]||'');
+    const content=item.searchText||normalizeToken(text(files[item.name]||'').slice(0,24000));
     const nameNorm=normalizeToken(item.name);
     const baseNorm=normalizeToken(item.name.split('/').pop()||item.name);
     let score=0;
@@ -460,7 +464,12 @@ export function buildRecentConversationContext(messages,{maxMessages=24,maxChars
     const m=src[i];
     if(!m||!['user','assistant'].includes(m.role)) continue;
     let content=redact(m.content||m.display||'');
-    content=text(content).replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g,'[ASSET_LOCAL]').trim();
+    content=text(content).replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g,'[ASSET_LOCAL]');
+    if(i<src.length-4){
+      content=content.replace(/<<<FILE:([^>]+)>>>[\s\S]*?<<<END_FILE>>>/g,(_,name)=>'[ALTERAÇÃO DE ARQUIVO: '+text(name).trim()+']');
+      content=content.replace(/<<<(?:IMAGE|EDIT_IMAGE):[\s\S]*?>>>/g,'[AÇÃO DE IMAGEM]');
+    }
+    content=content.trim();
     if(!content) continue;
     const remaining=maxChars-used;
     if(remaining<=0) break;
