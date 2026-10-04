@@ -1214,6 +1214,8 @@ async function freeGatewayChat(payload){
 async function publicFallbackChat(payload){
   const message=String(payload.message||'').trim();
   const wantsCode=codingIntent(message);
+  const conversationSummary=conversationSummaryContext(payload.conversationSummary);
+  const projectIndexText=wantsCode?projectIndexContext(payload.projectIndex):'';
 
   // Último fallback 100% sem Pollinations Text: tenta todos os modelos gratuitos conhecidos.
   const candidates=[...new Set([
@@ -1229,11 +1231,16 @@ async function publicFallbackChat(payload){
         : 'Você é o CodeZero, uma IA geral e professora. Converse naturalmente em português do Brasil. Responda cumprimentos normalmente, ajude com exercícios, matemática, ciências, história, redação e dúvidas gerais. NÃO programe nem fale do projeto a menos que o usuário peça código explicitamente.';
       const messages=[
         {role:'system',content:system},
-        ...boundedConversationHistory(payload.history,24,12000),
-        {role:'user',content:message+(wantsCode&&payload.project?'\n\nPROJETO ATUAL:\n'+String(payload.project).slice(0,18000):'')}
+        ...boundedConversationHistory(payload.history,20,11000),
+        {role:'user',content:
+          message+
+          (conversationSummary?'\n\nRESUMO DO CONTEXTO ANTIGO:\n'+conversationSummary:'')+
+          (wantsCode&&projectIndexText?'\n\nÍNDICE GLOBAL DO PROJETO:\n'+projectIndexText:'')+
+          (wantsCode&&payload.project?'\n\nARQUIVOS RELEVANTES:\n'+String(payload.project).slice(0,18000):'')
+        }
       ];
       const response=await gatewayCompletion(messages,model,wantsCode?3200:1800,0.2);
-      if(response) return {response,provider:'free-gateway-fallback',model,mode:wantsCode?'code':'chat'};
+      if(response) return {response,provider:'free-gateway-fallback',model,mode:wantsCode?'code':'chat',context:contextStatsPublic(payload.contextStats),summarized:Boolean(conversationSummary)};
     }catch(err){
       lastError=err;
       console.log('[fallback-model-failed]',model,safeLogError(err).slice(0,180));
@@ -1285,14 +1292,21 @@ async function workerChat(payload){
 async function providerChat(payload){
   const message=String(payload.message||'').trim();
   const wantsCode=codingIntent(message);
-  const project=wantsCode?String(payload.project||'').slice(0,12000):'';
+  const project=wantsCode?String(payload.project||'').slice(0,16000):'';
+  const projectIndexText=wantsCode?projectIndexContext(payload.projectIndex):'';
+  const conversationSummary=conversationSummaryContext(payload.conversationSummary);
   const systemPrompt=wantsCode
     ? 'Você é o CodeZero, uma IA assistente e programadora. O usuário pediu trabalho de código. Responda em português do Brasil. Ao alterar arquivos, use exatamente <<<FILE:nome>>> conteúdo <<<END_FILE>>> e gere código funcional.'
     : 'Você é o CodeZero, uma IA geral integrada a um editor. Converse normalmente em português do Brasil. Não altere arquivos e não use marcadores <<<FILE:...>>> em conversa casual. Só programe quando o usuário pedir explicitamente.';
   const messages=hardenModelMessages([
     {role:'system',content:systemPrompt},
-    ...boundedConversationHistory(payload.history,32,18000),
-    {role:'user',content:message+(project?'\n\nProjeto atual:\n'+project:'')}
+    ...boundedConversationHistory(payload.history,24,14000),
+    {role:'user',content:
+      message+
+      (conversationSummary?'\n\nResumo automático do contexto antigo:\n'+conversationSummary:'')+
+      (projectIndexText?'\n\nÍndice global do projeto:\n'+projectIndexText:'')+
+      (project?'\n\nArquivos relevantes:\n'+project:'')
+    }
   ]);
   const r=await fetch(AI_BASE_URL+'/chat/completions',{
     method:'POST',
@@ -1309,7 +1323,7 @@ async function providerChat(payload){
   }
   const response=data?.choices?.[0]?.message?.content||data?.response||data?.output_text||'';
   if(!response) throw new Error('Provedor respondeu sem texto');
-  return {response,mode:wantsCode?'code':'chat'};
+  return {response,mode:wantsCode?'code':'chat',context:contextStatsPublic(payload.contextStats),summarized:Boolean(conversationSummary)};
 }
 async function handleChat(req,res){
   try{
@@ -1357,7 +1371,7 @@ async function handleChat(req,res){
   }
 }
 const PUBLIC_ROOT_FILES=new Set([
-  '/index.html','/style.css','/app.js','/local-image.js','/local-text.js','/favicon.ico'
+  '/index.html','/style.css','/app.js','/local-image.js','/local-text.js','/context-engine.js','/favicon.ico'
 ]);
 const PUBLIC_RUNTIME_PREFIXES=[
   '/node_modules/onnxruntime-web/dist/',
@@ -1796,7 +1810,7 @@ const server=http.createServer(async(req,res)=>{
     return sendJson(res,200,{
       status:'online',
       service:'CodeZero Railway',
-      version:'15.7.0',
+      version:'15.8.0',
       ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,imageEditModel:IMAGE_EDIT_MODEL,image:true,imageEdit:true,pollinationsAppKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_APP_KEY),pollinationsServerKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_KEY),freeOnly:FREE_ONLY_MODE
     });
   }
