@@ -1525,7 +1525,7 @@ async function handleChat(req,res){
   }
 }
 const PUBLIC_ROOT_FILES=new Set([
-  '/index.html','/style.css','/app.js','/local-image.js','/local-text.js','/context-engine.js','/favicon.ico'
+  '/index.html','/style.css','/app.js','/local-image.js','/local-text.js','/context-engine.js','/agent-runtime.js','/favicon.ico'
 ]);
 const PUBLIC_RUNTIME_PREFIXES=[
   '/node_modules/onnxruntime-web/dist/',
