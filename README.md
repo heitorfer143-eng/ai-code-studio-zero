@@ -16,7 +16,7 @@ Abra `index.html` por um servidor estático. Os projetos são persistidos no `lo
 
 ## Estado
 MVP: chat com streaming visual, editor multi-arquivo, HTML/CSS/JS, preview sandbox, console e persistência local.\n## Fallback de chat local (V15.5)\nQuando os gateways gratuitos retornam erro, o navegador tenta carregar um LLM local via WebGPU. O modelo fica no cache do navegador depois do primeiro download. Se WebGPU/modelo não estiver disponível, entra um fallback offline mínimo para o chat não cair em 503. Nenhuma API paga é usada automaticamente.\n
-Railway deploy target: V15.8
+Railway deploy target: V15.9
 
 ## Conversas longas (V15.6)
 O chat mantém o histórico completo na interface. Para a IA, o contexto recente agora é selecionado por orçamento de tamanho em vez de cortar cegamente em 6–8 mensagens: até 32 mensagens / ~18 mil caracteres nos provedores de nuvem e um orçamento menor no modelo local para respeitar a memória do dispositivo.
@@ -59,3 +59,28 @@ A V15.8 reduz perda de contexto sem simplesmente aumentar o prompt:
 - O status mostra quantos arquivos foram recuperados para a tarefa atual.
 
 O índice é calculado no navegador e não depende de API paga.
+
+## Agente de programação V15.9
+
+A V15.9 completa o primeiro loop agente → execução → correção:
+
+1. Analisa o projeto com o contexto inteligente da V15.8.
+2. Planeja requisitos e arquivos afetados.
+3. Gera/edita os arquivos.
+4. Valida sintaxe, estrutura e referências no servidor.
+5. O usuário aprova o diff inicial.
+6. Para projetos web compatíveis, executa o preview em um iframe invisível com `sandbox="allow-scripts"`, sem `allow-same-origin` e com CSP que bloqueia rede.
+7. Captura `error`, `unhandledrejection` e `console.error`.
+8. Se houver erro real de runtime, chama o Debugger Agent com os diagnósticos.
+9. O reparo passa novamente pelas validações estáticas antes de voltar ao navegador.
+10. Testa novamente, no máximo 2 vezes.
+
+Regras de segurança:
+- Código do projeto não é executado no processo Node/Railway.
+- Ações de reparo têm limite rígido de 2 tentativas.
+- Cada aplicação cria checkpoints, permitindo desfazer.
+- Reparos em arquivos já aprovados podem ser aplicados automaticamente; se o Debugger Agent precisar criar/tocar outro arquivo, o diff é mostrado novamente.
+- Projetos que dependem de rede, `<script src>` ou imports de módulos são marcados como `static-only` no runner V15.9 para evitar falsos erros e execução externa.
+- Godot continua com validação estática de cenas, scripts, `res://`, NodePaths e estrutura. O CodeZero não finge executar o engine Godot no navegador/Railway.
+
+O relatório da resposta informa se a execução passou, quantas correções ocorreram ou se ficou somente em validação estática.
