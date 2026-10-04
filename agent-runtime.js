@@ -1,6 +1,6 @@
 // CodeZero V15.9 — executor de runtime web isolado no navegador.
 // Não executa código do usuário no servidor.
-// O iframe não recebe allow-same-origin e usa CSP sem rede.
+// O iframe usa origem isolada e CSP sem rede.
 
 function text(value){return String(value==null?'':value);}
 function safeMessage(value,max=700){
