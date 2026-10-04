@@ -283,26 +283,41 @@ function excerptContent(content,queryTokens,maxChars){
   return out.slice(0,maxChars);
 }
 
-export function serializeProjectIndex(index,maxChars=12000){
+export function serializeProjectIndex(index,maxChars=12000,priorityNames=[]){
+  const priority=new Set(Array.isArray(priorityNames)?priorityNames:[]);
+  const all=[...(index?.files||[])].sort((a,b)=>{
+    const pa=priority.has(a.name)?0:1;
+    const pb=priority.has(b.name)?0:1;
+    return pa-pb||a.name.localeCompare(b.name);
+  });
   const out={
     totalFiles:index?.totalFiles||0,
     totalBytes:index?.totalBytes||0,
     languages:index?.languages||{},
+    indexedFiles:0,
+    omittedFiles:0,
     files:[]
   };
-  for(const x of index?.files||[]){
+  for(const x of all){
+    const detailed=priority.has(x.name);
     const item={
       name:x.name,
       language:x.language,
       lines:x.lines,
       bytes:x.bytes,
-      symbols:(x.symbols||[]).slice(0,18),
-      imports:(x.imports||[]).slice(0,12),
-      refs:(x.refs||[]).slice(0,12)
+      ...(detailed?{
+        symbols:(x.symbols||[]).slice(0,18),
+        imports:(x.imports||[]).slice(0,12),
+        refs:(x.refs||[]).slice(0,12)
+      }:{})
     };
     out.files.push(item);
+    out.indexedFiles=out.files.length;
+    out.omittedFiles=Math.max(0,(index?.totalFiles||0)-out.indexedFiles);
     if(JSON.stringify(out).length>maxChars){
       out.files.pop();
+      out.indexedFiles=out.files.length;
+      out.omittedFiles=Math.max(0,(index?.totalFiles||0)-out.indexedFiles);
       break;
     }
   }
@@ -371,7 +386,7 @@ export function buildSmartProjectContext({
   return {
     text:parts.join('\n\n').slice(0,maxChars),
     index,
-    indexText:serializeProjectIndex(index,12000),
+    indexText:serializeProjectIndex(index,12000,selected),
     selected,
     stats:{
       selectedFiles:selected.length,
