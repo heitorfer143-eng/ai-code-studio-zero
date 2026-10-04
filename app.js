@@ -1,3 +1,9 @@
+import {
+  buildSmartProjectContext,
+  buildRecentConversationContext,
+  summarizeOlderConversation
+} from './context-engine.js?v=15.8.0';
+
 const $=s=>document.querySelector(s);
 const DEFAULT={
   'index.html':'<main><h1>Olá 👋</h1><p>Seu projeto aparece aqui.</p></main>',
@@ -735,12 +741,18 @@ async function setRailwayVariables(){
 
 function uid(){return 'c_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)}
 function freshChat(){
-  return {id:uid(),title:'Novo chat',messages:[],createdAt:Date.now(),updatedAt:Date.now()};
+  return {id:uid(),title:'Novo chat',messages:[],summary:'',createdAt:Date.now(),updatedAt:Date.now()};
 }
 function loadChats(){
   try{
     const raw=JSON.parse(localStorage.getItem(CHAT_KEY)||'null');
-    if(Array.isArray(raw)&&raw.length) return raw;
+    if(Array.isArray(raw)&&raw.length){
+      return raw.map(c=>({
+        ...c,
+        messages:Array.isArray(c?.messages)?c.messages:[],
+        summary:typeof c?.summary==='string'?c.summary:''
+      }));
+    }
   }catch{}
   return [freshChat()];
 }
@@ -1294,14 +1306,17 @@ function renderMessages(){
   }
 }
 function status(t){$('#status').textContent=t}
-function projectContext(){
-  const entries=Object.entries(files);
-  const safeEntries=entries.filter(([n])=>!isSensitiveWorkspacePath(n));
-  const hidden=entries.length-safeEntries.length;
-  const code=safeEntries.map(([n,c])=>`ARQUIVO ${n}:\n${redactClientSecrets(c)}`).join('\n\n');
-  const assetList=Object.keys(assets).length?'\n\nASSETS GERADOS DISPONÍVEIS:\n'+Object.keys(assets).map(n=>'assets/'+n).join('\n'):'';
-  const notice=hidden?'\n\n[SEGURANÇA: '+hidden+' arquivo(s) sensível(is) omitido(s) do contexto da IA.]':'';
-  return (code+assetList+notice).slice(0,32000);
+function projectContext(query=''){
+  return buildSmartProjectContext({
+    query,
+    files,
+    assets,
+    activeFile:active,
+    maxFiles:9,
+    maxChars:30000,
+    isSensitive:isSensitiveWorkspacePath,
+    redact:redactClientSecrets
+  });
 }
 function parseChangesFromResponse(text){
   const out=[];
