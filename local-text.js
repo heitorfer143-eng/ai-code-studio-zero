@@ -1,4 +1,4 @@
-// CodeZero V15.5 — fallback de chat local/gratuito
+// CodeZero V15.8 — fallback de chat local/gratuito com resumo de contexto
 // Tenta um LLM real no navegador via WebGPU. Se WebGPU/modelo falhar,
 // mantém o chat vivo com um fallback offline mínimo e transparente.
 
@@ -132,6 +132,7 @@ function offlineReply(message,wantsCode,reason=''){
 export async function generateLocalTextResponse({
   message,
   history=[],
+  conversationSummary='',
   project='',
   wantsCode=false,
   onStatus
@@ -143,9 +144,11 @@ export async function generateLocalTextResponse({
 
   try{
     const {engine:localEngine,support}=await loadEngine(onStatus);
-    const system=wantsCode
+    const summary=String(conversationSummary||'').trim().slice(0,4200);
+    const system=(wantsCode
       ? 'Você é o CodeZero, uma IA de programação rodando localmente no navegador. Responda em português do Brasil. Seja direto e preserve o projeto existente. Se precisar propor alterações de arquivos, use exatamente <<<FILE:nome>>> conteúdo <<<END_FILE>>>. Nunca diga que executou algo que não executou.'
-      : 'Você é o CodeZero, uma IA geral rodando localmente no navegador. Responda em português do Brasil, de forma útil, clara e objetiva. Não programe a menos que o usuário peça código.';
+      : 'Você é o CodeZero, uma IA geral rodando localmente no navegador. Responda em português do Brasil, de forma útil, clara e objetiva. Não programe a menos que o usuário peça código.')
+      +(summary?' Contexto antigo resumido da conversa: '+summary:'');
 
     const messages=[
       {role:'system',content:system},
