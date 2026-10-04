@@ -34,6 +34,15 @@ function tokensFrom(value,limit=40){
     limit
   );
 }
+function safeIndexPath(value){
+  let name=text(value).trim().replace(/\\/g,'/').replace(/^\.\/+/, '');
+  name=name.replace(/\/+/g,'/');
+  if(!name||name.length>240||name.startsWith('/')||/[\u0000-\u001f\u007f]/.test(name)) return '';
+  if(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(name)) return '';
+  const parts=name.split('/');
+  if(parts.some(p=>!p||p==='.'||p==='..'||['__proto__','prototype','constructor'].includes(p.toLowerCase()))) return '';
+  return name;
+}
 function extension(name){
   const m=/\.([^.\/]+)$/.exec(text(name).toLowerCase());
   return m?m[1]:'';
@@ -129,7 +138,7 @@ export function buildProjectIndex(files,{isSensitive=()=>false}={}){
   const alive=new Set();
 
   for(const [rawName,rawContent] of Object.entries(source)){
-    const name=text(rawName).replace(/\\/g,'/').replace(/^\.\//,'');
+    const name=safeIndexPath(rawName);
     if(!name||isSensitive(name)) continue;
     const content=text(rawContent);
     const hash=hashText(content);
@@ -338,10 +347,11 @@ export function buildSmartProjectContext({
   isSensitive=()=>false,
   redact=value=>text(value)
 }={}){
-  const safeFiles={};
+  const safeFiles=Object.create(null);
   let hidden=0;
-  for(const [name,value] of Object.entries(files||{})){
-    if(isSensitive(name)){hidden++;continue;}
+  for(const [rawName,value] of Object.entries(files||{})){
+    const name=safeIndexPath(rawName);
+    if(!name||isSensitive(name)){hidden++;continue;}
     safeFiles[name]=redact(value);
   }
 
