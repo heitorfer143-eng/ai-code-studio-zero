@@ -1062,7 +1062,7 @@ async function freeGatewayChat(payload){
   // Passo 1: especificação + plano.
   const planningMessages=[
     {role:'system',content:[
-      'Você é o arquiteto sênior do CodeZero V10.',
+      'Você é o arquiteto sênior do CodeZero V15.9.',
       'Converta o pedido em requisitos verificáveis, riscos, arquivos afetados e plano.',
       'Liste critérios de aceitação concretos antes do plano.',
       'Use o ÍNDICE GLOBAL para entender a estrutura inteira e os ARQUIVOS MAIS RELEVANTES para detalhes de implementação.',
@@ -1097,7 +1097,7 @@ async function freeGatewayChat(payload){
   const knownFiles=projectFileNames(project);
   const executionMessages=[
     {role:'system',content:[
-      'Você é o executor principal do CodeZero V10.',
+      'Você é o executor principal do CodeZero V15.9.',
       'Implemente EXATAMENTE os requisitos e critérios de aceitação do plano.',
       'Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>.',
       'Nunca use pseudocódigo, TODOs, placeholders ou trechos parciais.',
@@ -1141,7 +1141,7 @@ async function freeGatewayChat(payload){
     console.log('[v15.9-validation-failed]',validationErrors);
     const repairMessages=[
       {role:'system',content:[
-        'Você é o reparador técnico do CodeZero V10.',
+        'Você é o reparador técnico do CodeZero V15.9.',
         'Corrija TODOS os erros detectados sem remover funcionalidades corretas.',
         'Devolva a solução COMPLETA novamente usando <<<FILE:nome>>>...<<<END_FILE>>>.',
         'Em Godot, trate referências res://, NodePath, Input Map, scripts e cenas como dependências reais.'
@@ -1165,7 +1165,7 @@ async function freeGatewayChat(payload){
   // Passo 4: revisão semântica.
   const reviewMessages=[
     {role:'system',content:[
-      'Você é o revisor sênior e adversarial do CodeZero V10.',
+      'Você é o revisor sênior e adversarial do CodeZero V15.9.',
       'Compare pedido, critérios de aceitação, projeto original e solução.',
       'Procure funcionalidades faltando, regressões, referências quebradas e código que parece correto mas não funciona.',
       'Para Godot, confira sintaxe Godot 4, hierarquia de nós, scripts, sinais, Input Map, res://, colisões, câmera, física e recursos.',
@@ -1193,7 +1193,7 @@ async function freeGatewayChat(payload){
       semanticReviewApplied=true;
     }
   }catch(err){
-    console.log('[v10-reviewer-error]',safeLogError(err));
+    console.log('[v15.9-reviewer-error]',safeLogError(err));
   }
 
   // Passo 5: juiz adicional somente em tarefas complexas.
@@ -1201,7 +1201,7 @@ async function freeGatewayChat(payload){
     judgeRan=true;
     try{
       const judge=await gatewayCompletion([
-        {role:'system',content:'Você é o juiz final do CodeZero V10. Responda apenas PASS ou uma lista curta começando com FAIL: explicando requisitos não atendidos. Não escreva código.'},
+        {role:'system',content:'Você é o juiz final do CodeZero V15.9. Responda apenas PASS ou uma lista curta começando com FAIL: explicando requisitos não atendidos. Não escreva código.'},
         {role:'user',content:'PEDIDO:\n'+message+'\n\nCRITÉRIOS/PLANO:\n'+plan+'\n\nSOLUÇÃO:\n'+draft}
       ],ACTIVE_CODE_MODEL,500,0);
       if(/^FAIL:/i.test(judge)){
@@ -1220,7 +1220,7 @@ async function freeGatewayChat(payload){
         }
       }
     }catch(err){
-      console.log('[v10-judge-error]',safeLogError(err));
+      console.log('[v15.9-judge-error]',safeLogError(err));
     }
   }
 
@@ -1230,7 +1230,7 @@ async function freeGatewayChat(payload){
 
   return {
     response:draft,
-    provider:'brain-v10',
+    provider:'brain-v15.9',
     model:ACTIVE_CODE_MODEL,
     mode:'code',
     complexity,
@@ -1997,4 +1997,4 @@ const server=http.createServer(async(req,res)=>{
     fs.createReadStream(file).pipe(res);
   });
 });
-initAuthStorage().then(()=>server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'brain-v10'} · storage ${AUTH_STORAGE_MODE}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) providerSelfTest();})).catch(err=>{console.error('Auth storage init failed',err);process.exit(1);});
+initAuthStorage().then(()=>server.listen(PORT,'0.0.0.0',()=>{console.log(`CodeZero online :${PORT} · AI ${AI_API_KEY&&AI_BASE_URL&&AI_MODEL?'provider':'brain-v15.9'} · storage ${AUTH_STORAGE_MODE}`); if(!(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)) providerSelfTest();})).catch(err=>{console.error('Auth storage init failed',err);process.exit(1);});
