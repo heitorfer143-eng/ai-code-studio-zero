@@ -2,7 +2,8 @@ import {
   buildSmartProjectContext,
   buildRecentConversationContext,
   summarizeOlderConversation
-} from './context-engine.js?v=15.8.0';
+} from './context-engine.js?v=15.9.0';
+import {runSandboxRuntimeTest} from './agent-runtime.js?v=15.9.0';
 
 const $=s=>document.querySelector(s);
 const DEFAULT={
@@ -17,6 +18,7 @@ const ASSET_KEY='zero.assets.v1';
 const PROJECT_MEMORY_KEY='zero.project.memory.v1';
 const CHECKPOINT_KEY='zero.checkpoints.v1';
 const FREE_ONLY=true;
+const AGENT_RUNTIME_REPAIR_LIMIT=2;
 const MAX_IMPORT_FILE_BYTES=2*1024*1024;
 const MAX_IMPORT_IMAGE_BYTES=8*1024*1024;
 const MAX_IMPORT_ZIP_BYTES=8*1024*1024;
@@ -91,12 +93,12 @@ if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
 
 async function getLocalImageModule(){
   if(localImageModule) return localImageModule;
-  localImageModule=await import('./local-image.js?v=15.8.0');
+  localImageModule=await import('./local-image.js?v=15.9.0');
   return localImageModule;
 }
 async function getLocalTextModule(){
   if(localTextModule) return localTextModule;
-  localTextModule=await import('./local-text.js?v=15.8.0');
+  localTextModule=await import('./local-text.js?v=15.9.0');
   return localTextModule;
 }
 function emergencyLocalTextReply(message,wantsCode=false){
@@ -1352,30 +1354,64 @@ function reviewDiff(changes){
     $('#diffClose').onclick=()=>finish(false);
   });
 }
-function startTaskProgress(){
+const AGENT_TASK_LABELS=[
+  'Analisando projeto',
+  'Planejando',
+  'Editando',
+  'Executando e validando',
+  'Corrigindo erro',
+  'Testando novamente',
+  'Revisando resultado'
+];
+let currentAgentTaskStep=0;
+
+function renderAgentTaskProgress(){
   const box=$('#taskProgress'),fill=$('#taskBarFill'),pct=$('#taskProgressPct'),steps=$('#taskSteps');
-  if(!box) return;
-  const labels=['Analisando projeto','Planejando alterações','Programando','Validando arquivos','Revisando solução'];
+  if(!box||!fill||!pct||!steps) return;
+  const max=Math.max(1,AGENT_TASK_LABELS.length-1);
+  const progress=Math.round((currentAgentTaskStep/max)*94)+3;
+  fill.style.width=Math.min(97,progress)+'%';
+  pct.textContent=Math.min(97,progress)+'%';
+  [...steps.children].forEach((el,j)=>{
+    el.classList.toggle('active',j===currentAgentTaskStep);
+    el.classList.toggle('done',j<currentAgentTaskStep);
+    el.textContent=(j<currentAgentTaskStep?'✓ ':j===currentAgentTaskStep?'● ':'○ ')+AGENT_TASK_LABELS[j];
+  });
+}
+function startTaskProgress(){
+  const box=$('#taskProgress'),steps=$('#taskSteps');
+  if(!box||!steps) return;
   box.classList.remove('hidden');
   steps.textContent='';
-  labels.forEach((x,i)=>{const d=document.createElement('div');d.className='taskStep';d.dataset.i=i;d.textContent='○ '+x;steps.append(d);});
-  let i=0,progress=8;
-  const tick=()=>{
-    progress=Math.min(92,progress+(i<2?9:5));
-    if(progress>[22,42,68,82,92][i]&&i<labels.length-1)i++;
-    fill.style.width=progress+'%'; pct.textContent=progress+'%';
-    [...steps.children].forEach((el,j)=>{el.classList.toggle('active',j===i);el.classList.toggle('done',j<i);el.textContent=(j<i?'✓ ':j===i?'● ':'○ ')+labels[j];});
-  };
-  tick();
+  AGENT_TASK_LABELS.forEach((label,i)=>{
+    const d=document.createElement('div');
+    d.className='taskStep';
+    d.dataset.i=i;
+    d.textContent=(i===0?'● ':'○ ')+label;
+    steps.append(d);
+  });
+  currentAgentTaskStep=0;
   clearInterval(taskProgressTimer);
-  taskProgressTimer=setInterval(tick,900);
+  taskProgressTimer=null;
+  renderAgentTaskProgress();
+}
+function setAgentTaskStep(index,detail=''){
+  currentAgentTaskStep=Math.max(0,Math.min(AGENT_TASK_LABELS.length-1,Number(index)||0));
+  renderAgentTaskProgress();
+  if(detail) status(detail);
 }
 function finishTaskProgress(ok=true){
   clearInterval(taskProgressTimer); taskProgressTimer=null;
   const box=$('#taskProgress'),fill=$('#taskBarFill'),pct=$('#taskProgressPct');
   if(!box) return;
-  fill.style.width=(ok?100:0)+'%'; pct.textContent=ok?'100%':'Falhou';
-  setTimeout(()=>box.classList.add('hidden'),ok?1200:2200);
+  if(ok){
+    currentAgentTaskStep=AGENT_TASK_LABELS.length-1;
+    renderAgentTaskProgress();
+    fill.style.width='100%'; pct.textContent='100%';
+  }else{
+    pct.textContent='Falhou';
+  }
+  setTimeout(()=>box.classList.add('hidden'),ok?1500:2600);
 }
 
 async function applyFilesVisible(text){
@@ -1475,6 +1511,208 @@ function likelyCodeRequest(message){
   return false;
 }
 
+function diagnosticKey(d){
+  return [
+    String(d?.kind||'error'),
+    String(d?.message||'').replace(/\s+/g,' ').trim(),
+    String(d?.file||''),
+    Number(d?.line)||0,
+    Number(d?.column)||0
+  ].join('|');
+}
+function compactAgentDiagnostics(list){
+  const out=[],seen=new Set();
+  for(const raw of Array.isArray(list)?list:[]){
+    const item={
+      kind:String(raw?.kind||'error').slice(0,40),
+      message:String(raw?.message||'').replace(/[\r\n\0]+/g,' ').trim().slice(0,700),
+      file:safeWorkspacePath(raw?.file||'')||'',
+      line:Math.max(0,Number(raw?.line)||0),
+      column:Math.max(0,Number(raw?.column)||0)
+    };
+    if(!item.message) continue;
+    const key=diagnosticKey(item);
+    if(seen.has(key)) continue;
+    seen.add(key); out.push(item);
+    if(out.length>=20) break;
+  }
+  return out;
+}
+async function runCurrentProjectAgentTest(){
+  if(isGodotProject()){
+    return {
+      status:'skipped',
+      reason:'Godot usa validação estática nesta versão; o CodeZero não finge executar o engine.',
+      diagnostics:[],
+      durationMs:0,
+      mode:'godot-static'
+    };
+  }
+  const html=resolveAssets(files['index.html']||'');
+  const css=resolveAssets(files['style.css']||'');
+  const js=resolveAssets(files['script.js']||'');
+  const result=await runSandboxRuntimeTest({html,css,js,timeoutMs:1500});
+  return {...result,mode:'browser-sandbox'};
+}
+async function requestAgentRuntimeRepair({
+  originalPrompt,
+  diagnostics,
+  attempt,
+  conversationSummary,
+  memory
+}){
+  const diag=compactAgentDiagnostics(diagnostics);
+  if(!diag.length) throw new Error('Nenhum diagnóstico de runtime disponível para reparo.');
+  const searchQuery=originalPrompt+' '+diag.map(d=>d.file+' '+d.message).join(' ');
+  const smart=projectContext(searchQuery);
+  const r=await fetch('/agent/repair',{
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({
+      message:redactClientSecrets(originalPrompt),
+      attempt,
+      diagnostics:diag,
+      project:smart.text,
+      projectIndex:smart.indexText,
+      contextStats:smart.stats,
+      conversationSummary:redactClientSecrets(conversationSummary||''),
+      memory:redactClientSecrets(memory||'')
+    })
+  });
+  const raw=await r.text();
+  let data=null; try{data=JSON.parse(raw)}catch{}
+  if(!r.ok){
+    const detail=data?.details||data?.error||raw||('HTTP '+r.status);
+    throw new Error(String(detail).slice(0,500));
+  }
+  const response=extractText(data,raw);
+  if(!response.trim()) throw new Error('Debugger Agent respondeu vazio.');
+  return {data,response};
+}
+async function runAgentSelfCorrection({
+  originalPrompt,
+  initialChanged=[],
+  conversationSummary='',
+  memory=''
+}={}){
+  const changedSet=new Set(initialChanged);
+  const report={
+    status:'pending',
+    runtimeMode:'',
+    attempts:0,
+    tests:[],
+    repairs:[],
+    changedFiles:[...changedSet],
+    lastDiagnostics:[]
+  };
+
+  if(!initialChanged.length){
+    report.status='no-changes';
+    return report;
+  }
+
+  for(let round=0;round<=AGENT_RUNTIME_REPAIR_LIMIT;round++){
+    setAgentTaskStep(round===0?3:5,round===0?'🧪 Executando projeto em sandbox…':'🧪 Testando correção novamente…');
+    const test=await runCurrentProjectAgentTest();
+    report.runtimeMode=test.mode||'';
+    report.tests.push({
+      status:test.status,
+      reason:test.reason||'',
+      durationMs:test.durationMs||0,
+      diagnostics:compactAgentDiagnostics(test.diagnostics)
+    });
+
+    if(test.status==='passed'){
+      report.status='passed';
+      report.lastDiagnostics=[];
+      return report;
+    }
+    if(test.status==='skipped'){
+      report.status='static-only';
+      report.lastDiagnostics=[];
+      return report;
+    }
+
+    const diagnostics=compactAgentDiagnostics(test.diagnostics);
+    report.lastDiagnostics=diagnostics;
+    if(!diagnostics.length){
+      report.status='failed';
+      return report;
+    }
+    if(round>=AGENT_RUNTIME_REPAIR_LIMIT){
+      report.status='failed';
+      return report;
+    }
+
+    const attempt=round+1;
+    setAgentTaskStep(4,'🩹 Debugger Agent corrigindo tentativa '+attempt+'/'+AGENT_RUNTIME_REPAIR_LIMIT+'…');
+
+    let repaired;
+    try{
+      repaired=await requestAgentRuntimeRepair({
+        originalPrompt,
+        diagnostics,
+        attempt,
+        conversationSummary,
+        memory
+      });
+    }catch(err){
+      report.status='repair-unavailable';
+      report.error=String(err?.message||err).slice(0,500);
+      return report;
+    }
+
+    const proposed=parseChangesFromResponse(repaired.response);
+    if(!proposed.length){
+      report.status='repair-empty';
+      return report;
+    }
+
+    // Arquivos já aprovados podem ser autocorrigidos. Arquivo novo exige nova confirmação.
+    const introducesNewFile=proposed.some(change=>!changedSet.has(change.name));
+    if(introducesNewFile){
+      const accepted=await reviewDiff(proposed);
+      if(!accepted){
+        report.status='user-stopped';
+        return report;
+      }
+    }
+
+    const repairedNames=await applyFilesVisible(repaired.response);
+    if(!repairedNames.length){
+      report.status='repair-empty';
+      return report;
+    }
+
+    for(const name of repairedNames) changedSet.add(name);
+    report.attempts=attempt;
+    report.repairs.push({
+      attempt,
+      files:repairedNames,
+      provider:repaired.data?.provider||'debugger-agent'
+    });
+    report.changedFiles=[...changedSet];
+  }
+
+  report.status='failed';
+  return report;
+}
+function agentReportText(report){
+  if(!report||report.status==='no-changes') return '';
+  const repairs=Number(report.attempts)||0;
+  if(report.status==='passed'){
+    return '🧪 Agente V15.9: execução passou'+(repairs?' após '+repairs+' correção(ões) automática(s)':' sem erros')+'.';
+  }
+  if(report.status==='static-only'){
+    const reason=report.tests?.at?.(-1)?.reason||'runtime não disponível';
+    return '🧪 Agente V15.9: validação estática concluída. '+reason;
+  }
+  if(report.status==='user-stopped') return '🧪 Agente V15.9: autocorreção interrompida pelo usuário.';
+  if(report.status==='repair-unavailable') return '⚠️ Agente V15.9: erro detectado, mas o Debugger Agent ficou indisponível: '+(report.error||'falha desconhecida');
+  const errors=(report.lastDiagnostics||[]).slice(0,3).map(x=>x.message).join(' | ');
+  return '⚠️ Agente V15.9: ainda há erro após '+repairs+' tentativa(s)'+(errors?': '+errors:'')+'.';
+}
+
 async function send(){
   const p=$('#prompt').value.trim();
   if(!p||busy) return;
@@ -1499,13 +1737,15 @@ async function send(){
   const showCodingProgress=likelyCodeRequest(p);
   if(showCodingProgress) startTaskProgress();
   try{
-    status('🧠 CodeZero pensando…');
+    if(showCodingProgress) setAgentTaskStep(0,'🔎 Analisando projeto…');
+    else status('🧠 CodeZero pensando…');
     const safeAttachments=attachmentsForRequest.map(item=>({
       ...item,
       text:redactClientSecrets(item.text||'')
     }));
     const smartContext=projectContext(p);
-    status('🧠 Contexto: '+smartContext.stats.selectedFiles+'/'+smartContext.stats.totalFiles+' arquivos'+(conversationSummary?' • resumo antigo ativo':''));
+    if(showCodingProgress) setAgentTaskStep(1,'🧠 Planejando com '+smartContext.stats.selectedFiles+'/'+smartContext.stats.totalFiles+' arquivos…');
+    else status('🧠 Contexto: '+smartContext.stats.selectedFiles+'/'+smartContext.stats.totalFiles+' arquivos'+(conversationSummary?' • resumo antigo ativo':''));
     const requestPayload={
       message:redactClientSecrets(p),
       project:smartContext.text,
@@ -1556,20 +1796,40 @@ async function send(){
       }
       raw=JSON.stringify(data);
     }
-    const full=extractText(data,raw);
+    let full=extractText(data,raw);
     if(!full.trim()) throw new Error('O CodeZero respondeu vazio.');
+    if(showCodingProgress) setAgentTaskStep(2,'✍️ Preparando alterações…');
     const generatedImages=await processImageRequests(full);
     const editedImages=await processEditImageRequests(full);
     const proposed=parseChangesFromResponse(full);
     let changed=[];
+    let agentRun=null;
     if(proposed.length){
       const accepted=await reviewDiff(proposed);
-      if(accepted) changed=await applyFilesVisible(full);
-      else status('🚫 Alterações rejeitadas');
+      if(accepted){
+        changed=await applyFilesVisible(full);
+        if(showCodingProgress&&changed.length){
+          agentRun=await runAgentSelfCorrection({
+            originalPrompt:p,
+            initialChanged:changed,
+            conversationSummary,
+            memory:projectMemoryText()
+          });
+          changed=[...new Set([...(agentRun?.changedFiles||[]),...changed])];
+        }
+      }else{
+        status('🚫 Alterações rejeitadas');
+        agentRun={status:'user-stopped',attempts:0,changedFiles:[]};
+      }
     }
     if(changed.length) $('#editor').focus();
-    if(changed.length) rememberProjectChange(p,changed,{projectType:data?.projectType,complexity:data?.complexity});
-    const clean=(visibleReply(full)||'Projeto atualizado.')+(changed.length?'\n\n✓ '+changed.join(', '):'')+(generatedImages.length?'\n🖼️ Geradas: '+generatedImages.map(x=>'assets/'+x.name).join(', '):'')+(editedImages.length?'\n🛠️ Editadas: '+editedImages.map(x=>'assets/'+x.name).join(', '):'');
+    if(changed.length) rememberProjectChange(p,changed,{projectType:data?.projectType,complexity:data?.complexity,agentStatus:agentRun?.status,agentAttempts:agentRun?.attempts});
+    const reportLine=agentReportText(agentRun);
+    const clean=(visibleReply(full)||'Projeto atualizado.')+
+      (changed.length?'\n\n✓ '+changed.join(', '):'')+
+      (reportLine?'\n'+reportLine:'')+
+      (generatedImages.length?'\n🖼️ Geradas: '+generatedImages.map(x=>'assets/'+x.name).join(', '):'')+
+      (editedImages.length?'\n🛠️ Editadas: '+editedImages.map(x=>'assets/'+x.name).join(', '):'');
     chat.messages.push({role:'assistant',content:full,display:clean,sources:data?.sources||[]});
     chat.updatedAt=Date.now();
     refreshConversationSummary(chat);
@@ -1577,8 +1837,18 @@ async function send(){
     waiting.remove();
     renderMessages();
     renderChatList();
-    if(showCodingProgress) finishTaskProgress(true);
-    if(data?.provider==='local-webgpu'){
+    if(showCodingProgress){
+      setAgentTaskStep(6,'🔍 Revisando resultado…');
+      const failedAgent=agentRun&&['failed','repair-unavailable','repair-empty'].includes(agentRun.status);
+      finishTaskProgress(!failedAgent);
+    }
+    if(agentRun?.status==='passed'){
+      status('✅ V15.9: execução validada'+(agentRun.attempts?' após '+agentRun.attempts+' correção(ões)':''));
+    }else if(agentRun?.status==='static-only'){
+      status('✅ V15.9: validação estática concluída');
+    }else if(agentRun&&['failed','repair-unavailable','repair-empty'].includes(agentRun.status)){
+      status('⚠️ V15.9: alteração aplicada, mas ainda requer revisão');
+    }else if(data?.provider==='local-webgpu'){
       status('📱 CodeZero respondeu com IA local WebGPU');
     }else if(data?.provider==='local-rules'){
       status('📱 CodeZero em modo local mínimo');
