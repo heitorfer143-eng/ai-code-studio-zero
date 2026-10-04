@@ -844,12 +844,13 @@ function validateGeneratedFiles(files){
 }
 
 function parseProjectSnapshot(project){
-  const out={};
+  const out=Object.create(null);
   const text=String(project||'');
   const re=/^ARQUIVO\s+([^:]+):\n/gm;
   const matches=[...text.matchAll(re)];
   for(let i=0;i<matches.length;i++){
-    const name=matches[i][1].trim();
+    const name=safeProjectPath(matches[i][1]);
+    if(!name||isSensitiveProjectPath(name)) continue;
     const start=matches[i].index+matches[i][0].length;
     const end=i+1<matches.length?matches[i+1].index:text.length;
     out[name]=text.slice(start,end).replace(/\n\n$/,'').trimEnd();
