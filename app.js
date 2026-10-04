@@ -91,12 +91,12 @@ if(!chats.some(c=>c.id===activeChatId)) activeChatId=chats[0].id;
 
 async function getLocalImageModule(){
   if(localImageModule) return localImageModule;
-  localImageModule=await import('./local-image.js?v=15.7.0');
+  localImageModule=await import('./local-image.js?v=15.8.0');
   return localImageModule;
 }
 async function getLocalTextModule(){
   if(localTextModule) return localTextModule;
-  localTextModule=await import('./local-text.js?v=15.7.0');
+  localTextModule=await import('./local-text.js?v=15.8.0');
   return localTextModule;
 }
 function emergencyLocalTextReply(message,wantsCode=false){
@@ -392,7 +392,7 @@ async function mediaEdit(){
 function workspaceState(){
   if(files[active]!=null) files[active]=$('#editor').value;
   return {
-    version:13,
+    version:15.8,
     files,
     assets,
     projectMemory,
@@ -1446,28 +1446,17 @@ function extractText(value,raw='',depth=0){
   return raw||'';
 }
 
-function buildConversationContext(messages,{maxMessages=32,maxChars=18000}={}){
-  const src=Array.isArray(messages)?messages:[];
-  const out=[];
-  let used=0;
-  for(let i=src.length-1;i>=0&&out.length<maxMessages;i--){
-    const m=src[i];
-    if(!m||!['user','assistant'].includes(m.role)) continue;
-    let content=String(m.content||m.display||'').trim();
-    if(!content) continue;
-    // Evita mandar assets/data URLs gigantes ou blocos excessivos de volta ao modelo.
-    content=content.replace(/data:[^;\s]+;base64,[A-Za-z0-9+/=]+/g,'[ASSET_LOCAL]');
-    content=redactClientSecrets(content);
-    const remaining=maxChars-used;
-    if(remaining<=0) break;
-    if(content.length>remaining){
-      if(out.length) break;
-      content=content.slice(-remaining);
-    }
-    out.unshift({role:m.role,content});
-    used+=content.length;
-  }
-  return out;
+function buildConversationContext(messages,{maxMessages=24,maxChars=14000}={}){
+  return buildRecentConversationContext(messages,{
+    maxMessages,
+    maxChars,
+    redact:redactClientSecrets
+  });
+}
+function refreshConversationSummary(chat){
+  if(!chat||!Array.isArray(chat.messages)) return '';
+  chat.summary=summarizeOlderConversation(chat.messages,{keepRecent:24,maxChars:6000});
+  return chat.summary||'';
 }
 
 function likelyCodeRequest(message){
@@ -1489,7 +1478,8 @@ async function send(){
   const p=$('#prompt').value.trim();
   if(!p||busy) return;
   const chat=activeChat();
-  const previousHistory=buildConversationContext(chat.messages,{maxMessages:32,maxChars:18000});
+  const previousHistory=buildConversationContext(chat.messages,{maxMessages:24,maxChars:14000});
+  const conversationSummary=refreshConversationSummary(chat);
   const sentAttachments=pendingAttachments.map(a=>({name:a.name,kind:a.kind}));
   chat.messages.push({role:'user',content:p,display:p+(sentAttachments.length?'\n\n📎 '+sentAttachments.map(a=>a.name).join(', '):'')});
   if(chat.title==='Novo chat') chat.title=p.replace(/\s+/g,' ').slice(0,38)||'Novo chat';
@@ -1513,7 +1503,18 @@ async function send(){
       ...item,
       text:redactClientSecrets(item.text||'')
     }));
-    const requestPayload={message:redactClientSecrets(p),project:projectContext(),history:previousHistory,memory:redactClientSecrets(projectMemoryText()),attachments:safeAttachments};
+    const smartContext=projectContext(p);
+    status('🧠 Contexto: '+smartContext.stats.selectedFiles+'/'+smartContext.stats.totalFiles+' arquivos'+(conversationSummary?' • resumo antigo ativo':''));
+    const requestPayload={
+      message:redactClientSecrets(p),
+      project:smartContext.text,
+      projectIndex:smartContext.indexText,
+      contextStats:smartContext.stats,
+      conversationSummary:redactClientSecrets(conversationSummary),
+      history:previousHistory,
+      memory:redactClientSecrets(projectMemoryText()),
+      attachments:safeAttachments
+    };
     let raw='';
     let data=null;
     try{
@@ -1536,6 +1537,7 @@ async function send(){
         data=await local.generateLocalTextResponse({
           message:p,
           history:previousHistory,
+          conversationSummary,
           project:requestPayload.project,
           wantsCode:showCodingProgress,
           onStatus:(event)=>status('📱 '+String(event?.message||'IA local…').slice(0,110))
@@ -1569,6 +1571,7 @@ async function send(){
     const clean=(visibleReply(full)||'Projeto atualizado.')+(changed.length?'\n\n✓ '+changed.join(', '):'')+(generatedImages.length?'\n🖼️ Geradas: '+generatedImages.map(x=>'assets/'+x.name).join(', '):'')+(editedImages.length?'\n🛠️ Editadas: '+editedImages.map(x=>'assets/'+x.name).join(', '):'');
     chat.messages.push({role:'assistant',content:full,display:clean,sources:data?.sources||[]});
     chat.updatedAt=Date.now();
+    refreshConversationSummary(chat);
     saveChats();
     waiting.remove();
     renderMessages();
@@ -1590,6 +1593,7 @@ async function send(){
     const msg='Erro da IA: '+e.message;
     chat.messages.push({role:'assistant',content:msg,display:msg});
     chat.updatedAt=Date.now();
+    refreshConversationSummary(chat);
     saveChats();
     renderMessages();
     status('⚠️ '+e.message.slice(0,80));
