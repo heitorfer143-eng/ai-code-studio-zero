@@ -1056,7 +1056,7 @@ async function freeGatewayChat(payload){
       {role:'user',content:message+summaryContext+(memory?'\n\nMEMÓRIA DO PROJETO:\n'+memory:'')+attachmentsText+webContext}
     ];
     const response=await gatewayCompletion(messages,ACTIVE_CHAT_MODEL,2600,0.3);
-    return {response,provider:'brain-v10',model:ACTIVE_CHAT_MODEL,mode:'chat',complexity,searched:wantsWeb,sources:sources.map(({title,url})=>({title,url})),context:contextStatsPublic(payload.contextStats),summarized:Boolean(conversationSummary)};
+    return {response,provider:'brain-v15.9',model:ACTIVE_CHAT_MODEL,mode:'chat',complexity,searched:wantsWeb,sources:sources.map(({title,url})=>({title,url})),context:contextStatsPublic(payload.contextStats),summarized:Boolean(conversationSummary)};
   }
 
   // Passo 1: especificação + plano.
