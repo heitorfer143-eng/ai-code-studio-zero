@@ -906,14 +906,16 @@ function projectIndexContext(value){
     try{data=JSON.parse(value);}catch{return '';}
   }
   if(!data||typeof data!=='object') return '';
-  const files=[];
+
+  const cleanList=(v,max=18)=>Array.isArray(v)
+    ? v.map(x=>String(x||'').replace(/[\r\n\0]/g,' ').trim().slice(0,120)).filter(Boolean).slice(0,max)
+    : [];
+
+  const sanitized=[];
   for(const raw of Array.isArray(data.files)?data.files.slice(0,260):[]){
     const name=safeProjectPath(raw?.name);
     if(!name||isSensitiveProjectPath(name)) continue;
-    const cleanList=(v,max=18)=>Array.isArray(v)
-      ? v.map(x=>String(x||'').replace(/[\r\n\0]/g,' ').trim().slice(0,120)).filter(Boolean).slice(0,max)
-      : [];
-    files.push({
+    sanitized.push({
       name,
       language:String(raw?.language||'text').replace(/[^a-zA-Z0-9+.#_-]/g,'').slice(0,30)||'text',
       lines:Math.max(0,Math.min(1000000,Number(raw?.lines)||0)),
@@ -923,6 +925,7 @@ function projectIndexContext(value){
       refs:cleanList(raw?.refs,12)
     });
   }
+
   const languages={};
   if(data.languages&&typeof data.languages==='object'){
     for(const [k,v] of Object.entries(data.languages).slice(0,40)){
@@ -930,14 +933,29 @@ function projectIndexContext(value){
       if(key) languages[key]=Math.max(0,Math.min(100000,Number(v)||0));
     }
   }
-  return JSON.stringify({
-    totalFiles:Math.max(files.length,Math.min(100000,Number(data.totalFiles)||0)),
+
+  const totalFiles=Math.max(sanitized.length,Math.min(100000,Number(data.totalFiles)||0));
+  const out={
+    totalFiles,
     totalBytes:Math.max(0,Math.min(2*1024*1024*1024,Number(data.totalBytes)||0)),
-    indexedFiles:files.length,
-    omittedFiles:Math.max(0,Math.min(100000,Number(data.omittedFiles)||0)),
+    indexedFiles:0,
+    omittedFiles:Math.max(0,totalFiles),
     languages,
-    files
-  }).slice(0,12000);
+    files:[]
+  };
+
+  for(const item of sanitized){
+    out.files.push(item);
+    out.indexedFiles=out.files.length;
+    out.omittedFiles=Math.max(0,totalFiles-out.indexedFiles);
+    if(JSON.stringify(out).length>12000){
+      out.files.pop();
+      out.indexedFiles=out.files.length;
+      out.omittedFiles=Math.max(0,totalFiles-out.indexedFiles);
+      break;
+    }
+  }
+  return JSON.stringify(out);
 }
 function conversationSummaryContext(value){
   return redactSecrets(String(value||''))
