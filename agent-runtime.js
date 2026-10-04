@@ -11,8 +11,13 @@ function hasUnsupportedImports(js){
   return /(?:^|[;\n])\s*import\s+(?:[^('"\n][^\n]*?\s+from\s+)?['"][^'"]+['"]/m.test(source)
     || /\bimport\s*\(/.test(source);
 }
-function hasExternalScripts(html){
-  return /<script\b[^>]*\bsrc\s*=\s*["'](?:https?:)?\/\//i.test(text(html));
+function hasScriptSrc(html){
+  return /<script\b[^>]*\bsrc\s*=/i.test(text(html));
+}
+function needsNetwork(html,js){
+  const source=text(html)+'\n'+text(js);
+  return /\b(fetch|WebSocket|EventSource|XMLHttpRequest)\s*\(/.test(source)
+    || /\bnew\s+(?:WebSocket|EventSource|XMLHttpRequest)\b/.test(source);
 }
 
 export async function runSandboxRuntimeTest({
@@ -34,10 +39,18 @@ export async function runSandboxRuntimeTest({
       durationMs:0
     };
   }
-  if(hasExternalScripts(sourceHtml)){
+  if(hasScriptSrc(sourceHtml)){
     return {
       status:'skipped',
-      reason:'Preview usa scripts externos; o teste isolado bloqueia rede para não executar dependências remotas.',
+      reason:'Preview carrega scripts por src; o runner V15.9 não resolve arquivos externos/relativos dentro da sandbox.',
+      diagnostics:[],
+      durationMs:0
+    };
+  }
+  if(needsNetwork(sourceHtml,sourceJs)){
+    return {
+      status:'skipped',
+      reason:'Projeto usa rede; o teste V15.9 bloqueia acesso externo por segurança e evita falsos erros.',
       diagnostics:[],
       durationMs:0
     };
