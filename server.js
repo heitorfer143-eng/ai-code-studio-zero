@@ -1125,6 +1125,9 @@ async function freeGatewayChat(payload){
     }
   ];
   let draft=await gatewayCompletion(executionMessages,ACTIVE_CODE_MODEL,complexity==='high'?5200:4200,0.08);
+  let staticRepairAttempts=0;
+  let semanticReviewApplied=false;
+  let judgeRan=false;
 
   // Passo 3: validação determinística + reparos.
   let files=parseFileBlocks(draft);
@@ -1134,7 +1137,8 @@ async function freeGatewayChat(payload){
   ];
   const maxRepairs=complexity==='high'?3:2;
   for(let repair=0;repair<maxRepairs && validationErrors.length;repair++){
-    console.log('[v10-validation-failed]',validationErrors);
+    staticRepairAttempts++;
+    console.log('[v15.9-validation-failed]',validationErrors);
     const repairMessages=[
       {role:'system',content:[
         'Você é o reparador técnico do CodeZero V10.',
@@ -1186,6 +1190,7 @@ async function freeGatewayChat(payload){
       draft=reviewed;
       files=reviewedFiles;
       validationErrors=[];
+      semanticReviewApplied=true;
     }
   }catch(err){
     console.log('[v10-reviewer-error]',safeLogError(err));
@@ -1193,6 +1198,7 @@ async function freeGatewayChat(payload){
 
   // Passo 5: juiz adicional somente em tarefas complexas.
   if(complexity==='high' && !validationErrors.length){
+    judgeRan=true;
     try{
       const judge=await gatewayCompletion([
         {role:'system',content:'Você é o juiz final do CodeZero V10. Responda apenas PASS ou uma lista curta começando com FAIL: explicando requisitos não atendidos. Não escreva código.'},
@@ -1236,7 +1242,127 @@ async function freeGatewayChat(payload){
     searched:wantsWeb,
     sources:sources.map(({title,url})=>({title,url})),
     context:contextStatsPublic(payload.contextStats),
-    summarized:Boolean(conversationSummary)
+    summarized:Boolean(conversationSummary),
+    agent:{
+      version:'15.9',
+      workflow:['plan','edit','static-validate','review'],
+      staticRepairAttempts,
+      semanticReviewApplied,
+      judgeRan,
+      runtimeRepairLimit:2
+    }
+  };
+}
+
+// Reparo acionado pelo executor sandboxed no navegador.
+// O servidor não executa código arbitrário: recebe apenas diagnósticos estruturados,
+// gera um patch e aplica as mesmas validações estáticas da pipeline principal.
+async function repairFromRuntimeDiagnostics(payload){
+  const message=String(payload?.message||'').trim().slice(0,3000);
+  const attempt=Math.max(1,Math.min(2,Number(payload?.attempt)||1));
+  const project=String(payload?.project||'').slice(0,30000);
+  const projectIndexText=projectIndexContext(payload?.projectIndex);
+  const memory=String(payload?.memory||'').slice(0,5000);
+  const conversationSummary=conversationSummaryContext(payload?.conversationSummary);
+
+  const diagnostics=[];
+  for(const raw of Array.isArray(payload?.diagnostics)?payload.diagnostics.slice(0,20):[]){
+    const kind=String(raw?.kind||'error').replace(/[^a-z0-9_-]/gi,'').slice(0,24)||'error';
+    const file=safeProjectPath(raw?.file||'');
+    const messageText=redactSecrets(String(raw?.message||raw||''))
+      .replace(/[\r\n\0]+/g,' ')
+      .slice(0,700);
+    const line=Math.max(0,Math.min(1000000,Number(raw?.line)||0));
+    const column=Math.max(0,Math.min(1000000,Number(raw?.column)||0));
+    if(messageText) diagnostics.push({kind,file,line,column,message:messageText});
+  }
+  if(!message) {
+    const err=new Error('Pedido original ausente.');
+    err.status=400;
+    throw err;
+  }
+  if(!diagnostics.length){
+    const err=new Error('Nenhum diagnóstico de execução foi enviado.');
+    err.status=400;
+    throw err;
+  }
+
+  const diagnosticText=diagnostics.map((d,i)=>{
+    const loc=d.file?(' · '+d.file+(d.line?':'+d.line+(d.column?':'+d.column:''):' ')):'';
+    return (i+1)+'. ['+d.kind+']'+loc+' '+d.message;
+  }).join('\n');
+
+  const system=[
+    'Você é o Debugger Agent do CodeZero V15.9.',
+    'O usuário já aprovou uma alteração e um executor isolado no navegador encontrou erros reais em runtime.',
+    'Corrija a causa raiz sem desfazer funcionalidades corretas.',
+    'Para TODO arquivo criado ou alterado use <<<FILE:nome>>> conteúdo COMPLETO <<<END_FILE>>>.',
+    'Não use pseudocódigo, TODOs ou patches parciais.',
+    'Preserve arquivos não relacionados.',
+    'Não invente conteúdo de arquivo que exista somente no índice global e não esteja no contexto recuperado.',
+    'Nunca peça nem revele segredos, tokens ou variáveis de ambiente.',
+    'Esta é a tentativa '+attempt+' de no máximo 2.'
+  ].join(' ');
+
+  const user=[
+    'PEDIDO ORIGINAL:\n'+message,
+    'DIAGNÓSTICOS REAIS DA EXECUÇÃO:\n'+diagnosticText,
+    projectIndexText?'ÍNDICE GLOBAL DO PROJETO:\n'+projectIndexText:'',
+    conversationSummary?'RESUMO DA CONVERSA ANTIGA:\n'+conversationSummary:'',
+    memory?'MEMÓRIA DO PROJETO:\n'+memory:'',
+    'ARQUIVOS RELEVANTES NO ESTADO ATUAL:\n'+project
+  ].filter(Boolean).join('\n\n');
+
+  let response=await gatewayCompletion([
+    {role:'system',content:system},
+    {role:'user',content:user}
+  ],ACTIVE_CODE_MODEL,4200,0.03);
+
+  let generated=parseFileBlocks(response);
+  let errors=[
+    ...validateGeneratedFiles(generated),
+    ...validateProjectReferences(generated,project,projectIndexText)
+  ];
+
+  // Uma correção estática interna por tentativa de runtime. Não cria loop infinito.
+  if(errors.length){
+    response=await gatewayCompletion([
+      {role:'system',content:[
+        'Você é o reparador estático final do CodeZero V15.9.',
+        'Corrija todos os erros de validação abaixo.',
+        'Devolva TODOS os arquivos alterados completos em <<<FILE:nome>>>...<<<END_FILE>>>.',
+        'Não altere arquivos que não precisam mudar.'
+      ].join(' ')},
+      {role:'user',content:
+        'PEDIDO:\n'+message+
+        '\n\nDIAGNÓSTICOS DE RUNTIME:\n'+diagnosticText+
+        '\n\nSOLUÇÃO CANDIDATA:\n'+response+
+        '\n\nERROS ESTÁTICOS:\n- '+errors.join('\n- ')
+      }
+    ],ACTIVE_CODE_MODEL,4200,0.02);
+    generated=parseFileBlocks(response);
+    errors=[
+      ...validateGeneratedFiles(generated),
+      ...validateProjectReferences(generated,project,projectIndexText)
+    ];
+  }
+
+  if(errors.length){
+    const err=new Error('O reparo não passou na validação estática: '+errors.join(' | '));
+    err.status=422;
+    throw err;
+  }
+
+  return {
+    response,
+    provider:'brain-v15.9-debugger',
+    model:ACTIVE_CODE_MODEL,
+    mode:'runtime-repair',
+    attempt,
+    validated:true,
+    changedFiles:Object.keys(generated),
+    diagnostics,
+    context:contextStatsPublic(payload?.contextStats)
   };
 }
 async function publicFallbackChat(payload){
@@ -1838,14 +1964,27 @@ const server=http.createServer(async(req,res)=>{
     return sendJson(res,200,{
       status:'online',
       service:'CodeZero Railway',
-      version:'15.8.0',
-      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v8.3-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,imageEditModel:IMAGE_EDIT_MODEL,image:true,imageEdit:true,pollinationsAppKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_APP_KEY),pollinationsServerKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_KEY),freeOnly:FREE_ONLY_MODE
+      version:'15.9.0',
+      ai:(AI_API_KEY&&AI_BASE_URL&&AI_MODEL)?'provider':'brain-v15.9-agent',chatModel:ACTIVE_CHAT_MODEL,codeModel:ACTIVE_CODE_MODEL,imageModel:IMAGE_MODEL,imageEditModel:IMAGE_EDIT_MODEL,image:true,imageEdit:true,pollinationsAppKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_APP_KEY),pollinationsServerKey:FREE_ONLY_MODE?false:Boolean(POLLINATIONS_KEY),freeOnly:FREE_ONLY_MODE
     });
   }
   if(req.url==='/chat'&&req.method==='POST'){
     if(!sameOrigin(req)) return sendJson(res,403,{error:'Origem inválida'});
     if(!rateLimit(req,30,60000)) return sendJson(res,429,{error:'Muitas mensagens em pouco tempo. Aguarde alguns segundos.'});
     return handleChat(req,res);
+  }
+  if(req.url==='/agent/repair'&&req.method==='POST'){
+    if(!sameOrigin(req)) return sendJson(res,403,{error:'Origem inválida'});
+    if(!rateLimit(req,20,60000)) return sendJson(res,429,{error:'Muitas tentativas de reparo. Aguarde alguns segundos.'});
+    try{
+      const body=await readJson(req,350000);
+      const result=await repairFromRuntimeDiagnostics(body);
+      return sendJson(res,200,result);
+    }catch(err){
+      const status=Math.min(599,Math.max(400,Number(err?.status)||502));
+      console.log('[agent-runtime-repair-error]',safeLogError(err));
+      return sendJson(res,status,{error:'Falha no reparo do agente',details:safePublicError(err,'Não foi possível corrigir automaticamente esta execução.')});
+    }
   }
   if(req.method!=='GET'&&req.method!=='HEAD') return sendJson(res,405,{error:'Método não permitido'});
   const file=safeFile(req.url||'/');
