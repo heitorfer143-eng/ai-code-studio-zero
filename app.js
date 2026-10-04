@@ -1307,12 +1307,13 @@ function renderMessages(){
 }
 function status(t){$('#status').textContent=t}
 function projectContext(query=''){
+  const broad=/\b(projeto inteiro|projeto completo|todos os arquivos|todas as partes|arquitetura|refator|migrar|migração|migracao|converter|conversão|conversao)\b/i.test(String(query||''));
   return buildSmartProjectContext({
     query,
     files,
     assets,
     activeFile:active,
-    maxFiles:9,
+    maxFiles:broad?14:9,
     maxChars:30000,
     isSensitive:isSensitiveWorkspacePath,
     redact:redactClientSecrets
@@ -1842,11 +1843,14 @@ function installGodotWorkspace(newFiles,newAssets,label='Projeto Godot'){
 }
 
 async function convertImportedProjectToGodot(importedFiles,importedAssets){
-  const sourceNames=Object.keys(importedFiles);
-  if(!sourceNames.length) throw new Error('Nenhum arquivo de código/texto reconhecido para converter.');
+  const safeSourceEntries=Object.entries(importedFiles)
+    .filter(([name])=>!isSensitiveWorkspacePath(name))
+    .map(([name,content])=>[name,redactClientSecrets(content)]);
+  const sourceNames=safeSourceEntries.map(([name])=>name);
+  if(!sourceNames.length) throw new Error('Nenhum arquivo de código/texto não sensível reconhecido para converter.');
 
   const sourceProject=[
-    ...Object.entries(importedFiles).map(([name,content])=>`ARQUIVO ${name}:\n${String(content).slice(0,12000)}`),
+    ...safeSourceEntries.map(([name,content])=>`ARQUIVO ${name}:\n${String(content).slice(0,12000)}`),
     ...Object.keys(importedAssets).map(name=>`ARQUIVO assets/${name}:\n[BINARY_ASSET_DISPONIVEL]`)
   ].join('\n\n').slice(0,30000);
 
