@@ -394,7 +394,7 @@ async function mediaEdit(){
 function workspaceState(){
   if(files[active]!=null) files[active]=$('#editor').value;
   return {
-    version:15.8,
+    version:15.9,
     files,
     assets,
     projectMemory,
@@ -1603,7 +1603,8 @@ async function runAgentSelfCorrection({
     tests:[],
     repairs:[],
     changedFiles:[...changedSet],
-    lastDiagnostics:[]
+    lastDiagnostics:[],
+    finalResponse:''
   };
 
   if(!initialChanged.length){
@@ -1662,6 +1663,7 @@ async function runAgentSelfCorrection({
       return report;
     }
 
+    report.finalResponse=repaired.response;
     const proposed=parseChangesFromResponse(repaired.response);
     if(!proposed.length){
       report.status='repair-empty';
@@ -1825,12 +1827,24 @@ async function send(){
     if(changed.length) $('#editor').focus();
     if(changed.length) rememberProjectChange(p,changed,{projectType:data?.projectType,complexity:data?.complexity,agentStatus:agentRun?.status,agentAttempts:agentRun?.attempts});
     const reportLine=agentReportText(agentRun);
+    const storedContent=agentRun?.finalResponse||full;
     const clean=(visibleReply(full)||'Projeto atualizado.')+
       (changed.length?'\n\n✓ '+changed.join(', '):'')+
       (reportLine?'\n'+reportLine:'')+
       (generatedImages.length?'\n🖼️ Geradas: '+generatedImages.map(x=>'assets/'+x.name).join(', '):'')+
       (editedImages.length?'\n🛠️ Editadas: '+editedImages.map(x=>'assets/'+x.name).join(', '):'');
-    chat.messages.push({role:'assistant',content:full,display:clean,sources:data?.sources||[]});
+    chat.messages.push({
+      role:'assistant',
+      content:storedContent,
+      display:clean,
+      sources:data?.sources||[],
+      agent:agentRun?{
+        status:agentRun.status,
+        attempts:agentRun.attempts,
+        runtimeMode:agentRun.runtimeMode,
+        tests:agentRun.tests?.map(t=>({status:t.status,reason:t.reason||'',durationMs:t.durationMs||0}))||[]
+      }:null
+    });
     chat.updatedAt=Date.now();
     refreshConversationSummary(chat);
     saveChats();
@@ -1853,7 +1867,7 @@ async function send(){
     }else if(data?.provider==='local-rules'){
       status('📱 CodeZero em modo local mínimo');
     }else if(data?.validated){
-      status('✅ V10 validou '+(data.changedFiles?.length||changed.length)+' arquivo(s) • '+(data.complexity||'normal'));
+      status('✅ V15.9 validou '+(data.changedFiles?.length||changed.length)+' arquivo(s) • '+(data.complexity||'normal'));
     }else{
       status(data?.searched?'🌐 CodeZero pesquisou e respondeu':'✅ CodeZero respondeu');
     }
